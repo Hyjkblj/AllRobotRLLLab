@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: allrobotrl
+      POSTGRES_USER: allrobotrl
+      POSTGRES_PASSWORD: allrobotrl_dev_only
+    # 5432 is occupied by a host PostgreSQL service; expose the compose DB on
+    # 5434 while retaining PostgreSQL's standard container port.
+    ports: ["5434:5432"]
+    volumes:
+      - p2-postgres:/var/lib/postgresql/data
+      - ../migrations:/docker-entrypoint-initdb.d:ro
+  redis:
+    image: redis:7
+    # 6379 and 6380 are commonly occupied by shared local Redis services.
+    # Keep the container port stable while exposing this stack on 6381.
+    ports: ["6381:6379"]
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: allrobotrl
+      MINIO_ROOT_PASSWORD: allrobotrl_dev_only
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - p2-minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 allrobotrl allrobotrl_dev_only
+        && mc mb --ignore-existing local/allrobotrl
+
+volumes:
+  p2-postgres:
+  p2-minio:

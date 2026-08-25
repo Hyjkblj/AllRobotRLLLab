@@ -1,0 +1,24 @@
+name: allrobotrl-platform
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - setuptools
+  - wheel
+  - pip:
+      - "fastapi>=0.115,<1"
+      - "pydantic>=2.8,<3"
+      - "uvicorn>=0.30,<1"
+      - "numpy>=1.26,<2"
+      - "httpx>=0.27,<1"
+      - "pytest>=8.3,<9"
+      - "psycopg[binary]>=3.2,<4"
+      - "celery>=5.4,<6"
+      - "redis>=5,<7"
+      - "minio>=7.2,<8"
+      - "torch==2.7.0"
+      - "onnx>=1.17,<2"
+      - "onnxruntime>=1.20,<2"
+      - "ml-dtypes==0.5.4"

@@ -1,0 +1,1323 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Motion Lab · G1 Studio</title>
+  <meta name="description" content="Motion Lab 3D motion editing prototype for a humanoid robot training platform." />
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1a1f24;
+      --muted: #6d747b;
+      --soft: #aab1b8;
+      --line: #d9dde1;
+      --line-strong: #c4cbd1;
+      --surface: #ffffff;
+      --surface-soft: #f6f7f8;
+      --surface-warm: #f0f1f2;
+      --silver: #c7cdd2;
+      --silver-deep: #8d979f;
+      --accent: #2367d1;
+      --accent-soft: #e8f0ff;
+      --success: #297a58;
+      --warning: #a26a1d;
+      --danger: #a84f50;
+      --shadow: 0 18px 42px rgba(28, 35, 42, 0.08);
+      --radius: 8px;
+      --radius-sm: 5px;
+      --ease: cubic-bezier(.2, .75, .25, 1);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #eceeef;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      letter-spacing: 0;
+      overflow-x: hidden;
+    }
+
+    button, input, select { font: inherit; }
+
+    button { color: inherit; }
+
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(35, 103, 209, .24);
+      outline-offset: 2px;
+    }
+
+    .app-shell {
+      min-height: 100dvh;
+      width: 100%;
+      max-width: 100%;
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      background: #eef0f1;
+      overflow-x: hidden;
+    }
+
+    .rail {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 22px;
+      padding: 18px 10px;
+      background: #f7f8f8;
+      border-right: 1px solid var(--line);
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .04em;
+      background: #1c2227;
+      border-radius: 50%;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.32);
+    }
+
+    .rail-nav {
+      display: grid;
+      gap: 8px;
+      width: 100%;
+    }
+
+    .rail-button {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto;
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: background 180ms var(--ease), color 180ms var(--ease), border-color 180ms var(--ease), transform 180ms var(--ease);
+    }
+
+    .rail-button:hover { color: var(--ink); background: #fff; border-color: var(--line); }
+    .rail-button:active { transform: scale(.96); }
+    .rail-button[aria-current="page"] { color: var(--accent); background: #fff; border-color: #cbd8ef; box-shadow: 0 5px 16px rgba(35,103,209,.08); }
+    .rail-spacer { flex: 1; }
+
+    .main {
+      min-width: 0;
+      max-width: 100%;
+      display: grid;
+      grid-template-rows: 64px minmax(0, 1fr);
+    }
+
+    .topbar {
+      min-width: 0;
+      width: 100%;
+      max-width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 0 28px;
+      background: rgba(255,255,255,.82);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+    }
+
+    .crumbs { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+    .crumbs .eyebrow { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+    .crumbs .slash { color: var(--line-strong); }
+    .crumbs h1 { min-width: 0; overflow: hidden; margin: 0; font-size: 16px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+    .topbar-actions { display: flex; align-items: center; gap: 10px; }
+    .setup-trigger .setup-label { display: inline; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #86a0b5; }
+    .status.success::before { background: var(--success); }
+    .status.warning::before { background: var(--warning); }
+
+    .avatar {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      background: #edf0f2;
+      color: #58626a;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .button {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 14px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      transition: transform 180ms var(--ease), box-shadow 180ms var(--ease), border-color 180ms var(--ease), background 180ms var(--ease);
+    }
+    .button:hover { border-color: #aab4bc; box-shadow: 0 7px 16px rgba(27,35,41,.08); }
+    .button:active { transform: translateY(1px); }
+    .button.primary { border-color: #1d5fc5; background: var(--accent); color: #fff; }
+    .button.primary:hover { background: #1857b7; box-shadow: 0 8px 18px rgba(35,103,209,.22); }
+    .button.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+    .button.ghost:hover { border-color: var(--line); background: #fff; color: var(--ink); box-shadow: none; }
+    .button.icon-only { width: 44px; padding: 0; }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(0, calc(100dvh - 240px)) 112px;
+      gap: 18px;
+      padding: 22px 28px 24px;
+    }
+
+    .stage-grid {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 332px;
+      gap: 18px;
+    }
+
+    .stage {
+      min-width: 0;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #f7f8f8;
+      box-shadow: var(--shadow);
+    }
+
+    #scene {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .stage-header {
+      position: absolute;
+      z-index: 2;
+      top: 18px;
+      left: 20px;
+      right: 20px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+    .stage-title strong { display: block; font-size: 15px; font-weight: 600; }
+    .stage-title > span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .stage-tools { display: flex; gap: 8px; pointer-events: auto; }
+    .glass-button { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid rgba(197,204,209,.95); border-radius: 50%; background: rgba(255,255,255,.8); color: #5f6870; cursor: pointer; backdrop-filter: blur(10px); }
+    .glass-button:hover { background: #fff; color: var(--ink); }
+
+    .stage-hint {
+      position: absolute;
+      z-index: 2;
+      left: 20px;
+      bottom: 20px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 11px;
+      border: 1px solid rgba(198,204,209,.9);
+      border-radius: 5px;
+      background: rgba(255,255,255,.72);
+      color: #68727a;
+      font-size: 11px;
+      backdrop-filter: blur(10px);
+    }
+    .stage-hint kbd { padding: 2px 5px; border: 1px solid #cbd1d5; border-bottom-width: 2px; border-radius: 3px; background: #fff; color: #4f5960; font-size: 10px; }
+
+    .inspector {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.9);
+      box-shadow: var(--shadow);
+    }
+
+    .inspector-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--line); }
+    .tab { min-height: 48px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+    .tab:hover { color: var(--ink); background: var(--surface-soft); }
+    .tab[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--ink); font-weight: 600; }
+    .inspector-content { min-height: 0; overflow: auto; padding: 22px 20px; }
+    .panel { display: none; }
+    .panel.active { display: block; animation: appear 220ms var(--ease); }
+    @keyframes appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+    .panel-heading { margin-bottom: 18px; }
+    .panel-heading h2 { margin: 0; font-size: 17px; font-weight: 600; }
+    .panel-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .field { margin-top: 18px; }
+    .field:first-of-type { margin-top: 0; }
+    .field-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; color: #535c63; font-size: 12px; font-weight: 600; }
+    .field-label output { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 600; }
+    .select { width: 100%; height: 44px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; color: var(--ink); }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+    .range-meta { display: flex; justify-content: space-between; margin-top: 4px; color: #9aa1a7; font-size: 10px; }
+
+    .section-divider { height: 1px; margin: 22px 0; background: var(--line); }
+    .mini-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .mini-row + .mini-row { margin-top: 13px; }
+    .mini-row span { color: var(--muted); font-size: 12px; }
+    .mini-row strong { font-size: 12px; font-weight: 600; }
+
+    .switch { position: relative; width: 36px; height: 20px; display: inline-flex; flex: 0 0 auto; }
+    .switch input { position: absolute; opacity: 0; }
+    .switch-track { width: 36px; height: 20px; border-radius: 99px; background: #c9cfd4; transition: background 180ms var(--ease); }
+    .switch-track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.16); transition: transform 180ms var(--ease); }
+    .switch input:checked + .switch-track { background: var(--accent); }
+    .switch input:checked + .switch-track::after { transform: translateX(16px); }
+
+    .notice { display: flex; align-items: flex-start; gap: 9px; padding: 10px 11px; border: 1px solid #d9e4f8; border-radius: 5px; background: #f3f7ff; color: #42608e; font-size: 11px; }
+    .notice svg { flex: 0 0 auto; margin-top: 1px; }
+    .tag { display: inline-flex; align-items: center; min-height: 23px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; background: #fafafa; color: #5f6870; font-size: 11px; }
+    .tag.success { border-color: #c8dfd3; background: #f2faf5; color: var(--success); }
+    .tag.warning { border-color: #eed7b5; background: #fff9ef; color: var(--warning); }
+    .keyframe-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 16px; }
+    .keyframe-toolbar .button { min-height: 38px; padding-inline: 11px; font-size: 11px; }
+    .keyframe-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; margin-top: 9px; }
+    .keyframe-chip { min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid #cbd9e9; border-radius: 5px; background: #f5f8fd; color: #3a5c83; cursor: pointer; font-size: 10px; }
+    .keyframe-chip:hover, .keyframe-chip[aria-current="true"] { border-color: #6d9bd3; background: #eaf2ff; color: #1f4f8a; }
+    .keyframe-chip small { color: #7e9cc1; font-variant-numeric: tabular-nums; }
+    .empty-state { color: #9aa1a7; font-size: 11px; }
+    .joint-angle-row { display: flex; align-items: center; gap: 7px; margin-top: 9px; }
+    .joint-angle-row input { width: 94px; height: 36px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 5px; color: var(--ink); background: #fff; font: inherit; font-variant-numeric: tabular-nums; }
+    .joint-angle-row > span:not(.joint-limit) { color: var(--muted); font-size: 12px; }
+    .joint-limit { margin-left: auto; color: #89939b; font-size: 10px; font-variant-numeric: tabular-nums; }
+    .inline-select { max-width: 164px; height: 30px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); font-size: 11px; }
+    .joint-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px; }
+    .joint-actions .button { min-height: 40px; padding-inline: 9px; font-size: 11px; }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: 116px minmax(0, 1fr) 160px;
+      align-items: center;
+      gap: 18px;
+      padding: 18px 22px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.9);
+      box-shadow: var(--shadow);
+    }
+    .transport { display: flex; align-items: center; gap: 8px; }
+    .transport .button { min-width: 40px; padding: 0 10px; }
+    .transport .button.icon-only { flex: 0 0 44px; padding: 0; }
+    .timecode { color: #515a61; font-variant-numeric: tabular-nums; font-size: 12px; }
+    .timeline-main { min-width: 0; }
+    .timeline-info { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 11px; color: var(--muted); font-size: 11px; }
+    .timeline-info strong { color: var(--ink); font-weight: 600; }
+    .timeline-track { position: relative; height: 22px; display: flex; align-items: center; }
+    .timeline-line { width: 100%; height: 4px; border-radius: 99px; background: #d7dce0; }
+    .timeline-fill { position: absolute; left: 0; width: 36%; height: 4px; border-radius: 99px; background: var(--accent); }
+    .timeline-handle { position: absolute; left: 36%; width: 14px; height: 14px; border: 3px solid #fff; border-radius: 50%; background: var(--accent); box-shadow: 0 2px 7px rgba(35,103,209,.3); transform: translateX(-50%); }
+    .keyframe-markers { position: absolute; inset: 0; pointer-events: none; }
+    .keyframe-marker { position: absolute; top: 50%; width: 8px; height: 8px; border: 2px solid #fff; border-radius: 50%; background: #bd8551; box-shadow: 0 0 0 1px rgba(189,133,81,.35); transform: translate(-50%, -50%); }
+    .timeline-input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+    .timeline-markers { display: flex; justify-content: space-between; margin-top: 6px; color: #9aa1a7; font-size: 10px; }
+    .timeline-meta { display: flex; align-items: center; justify-content: flex-end; gap: 8px; white-space: nowrap; }
+    .timeline-meta .button { white-space: nowrap; }
+
+    .reward-meter { height: 6px; margin-top: 7px; overflow: hidden; border-radius: 99px; background: #e5e8ea; }
+    .reward-meter > span { display: block; height: 100%; border-radius: inherit; background: #7b8790; }
+    .reward-meter.blue > span { background: var(--accent); }
+    .reward-meter.green > span { background: #4b9b77; }
+    .reward-meter.orange > span { background: #bd8551; }
+
+    .modal-shell { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; }
+    .modal-shell[hidden] { display: none; }
+    .modal-backdrop { position: absolute; inset: 0; background: rgba(24, 30, 35, .36); backdrop-filter: blur(5px); }
+    .setup-modal { position: relative; width: min(980px, 100%); max-height: min(760px, calc(100dvh - 48px)); overflow: auto; border: 1px solid #cbd1d6; border-radius: 10px; background: #fff; box-shadow: 0 28px 70px rgba(24, 31, 37, .24); }
+    .setup-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 26px 28px 18px; border-bottom: 1px solid var(--line); }
+    .setup-header h2 { margin: 0; font-size: 22px; font-weight: 600; }
+    .setup-header p { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+    .setup-close { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
+    .setup-close:hover { border-color: var(--line); background: var(--surface-soft); color: var(--ink); }
+    .setup-stepper { display: flex; align-items: center; gap: 22px; padding: 17px 28px; border-bottom: 1px solid var(--line); color: var(--soft); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .setup-step { display: inline-flex; align-items: center; gap: 8px; }
+    .setup-step::before { content: attr(data-step); width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: 10px; }
+    .setup-step.active { color: var(--ink); }
+    .setup-step.active::before { border-color: var(--accent); background: var(--accent); color: #fff; }
+    .setup-content { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr); gap: 26px; padding: 26px 28px; }
+    .setup-section + .setup-section { margin-top: 24px; }
+    .setup-section h3 { margin: 0; font-size: 14px; font-weight: 600; }
+    .setup-section > p { margin: 4px 0 14px; color: var(--muted); font-size: 12px; }
+    .maker-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .choice-card { min-width: 0; min-height: 78px; display: flex; align-items: center; gap: 10px; padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: var(--ink); text-align: left; cursor: pointer; transition: border-color 180ms var(--ease), background 180ms var(--ease), transform 180ms var(--ease); }
+    .choice-card:hover { border-color: #aab4bc; background: var(--surface-soft); }
+    .choice-card:active { transform: translateY(1px); }
+    .choice-card[aria-pressed="true"] { border-color: #91b3ea; background: #f4f8ff; box-shadow: inset 0 0 0 1px rgba(35,103,209,.12); }
+    .brand-avatar { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: #f3f5f6; color: #384149; font-size: 13px; font-weight: 700; }
+    .brand-avatar img { width: 24px; height: 24px; object-fit: contain; }
+    .brand-fallback { display: none; }
+    .brand-fallback[hidden] { display: none; }
+    .brand-fallback:not([hidden]) { display: grid; }
+    .choice-copy { min-width: 0; }
+    .choice-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+    .choice-copy span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .setup-select { margin-top: 12px; }
+    .setup-select label { display: block; margin-bottom: 7px; color: #535c63; font-size: 12px; font-weight: 600; }
+    .source-grid { display: grid; gap: 8px; }
+    .source-card { min-height: 58px; }
+    .source-card .source-icon { width: 32px; height: 32px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px; background: #f7f8f8; color: #62707b; }
+    .source-card .tag { margin-left: auto; }
+    .dropzone { min-height: 82px; display: grid; place-items: center; gap: 3px; padding: 13px; border: 1px dashed #b6bec5; border-radius: 7px; background: #fafbfb; color: var(--muted); text-align: center; cursor: pointer; }
+    .dropzone:hover { border-color: #8fa4b6; background: #f5f8fa; }
+    .dropzone strong { color: var(--ink); font-size: 12px; font-weight: 600; }
+    .dropzone span { font-size: 11px; }
+    .dropzone input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .setup-helper { margin: 8px 0 0; color: #7b858d; font-size: 11px; line-height: 1.55; }
+    .urdf-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+    .setup-footer { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 18px 28px 24px; border-top: 1px solid var(--line); }
+    .toast { position: fixed; z-index: 120; right: 24px; bottom: 24px; display: inline-flex; align-items: center; gap: 8px; max-width: min(360px, calc(100vw - 48px)); padding: 11px 14px; border: 1px solid #c9d8ea; border-radius: 7px; background: #f4f8ff; color: #315783; box-shadow: 0 12px 28px rgba(28, 35, 42, .14); font-size: 12px; }
+    .toast[hidden] { display: none; }
+
+    @media (max-width: 1100px) {
+      .stage-grid { grid-template-columns: minmax(0, 1fr) 300px; }
+      .workspace { padding-inline: 18px; }
+      .topbar { padding-inline: 18px; }
+    }
+
+    @media (max-width: 840px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .rail { position: fixed; z-index: 20; right: 16px; bottom: 16px; width: auto; height: 58px; flex-direction: row; gap: 7px; padding: 5px; border: 1px solid var(--line); border-radius: 99px; box-shadow: 0 10px 25px rgba(28,35,42,.14); }
+      .brand-mark, .rail-spacer { display: none; }
+      .rail-nav { display: flex; width: auto; gap: 2px; }
+      .rail-button { width: 44px; height: 44px; }
+      .main { grid-template-rows: 60px auto; }
+      .topbar .status, .topbar-actions .button.ghost:not(#openSetup) { display: none; }
+      .topbar #openSetup { display: inline-flex; width: 44px; padding: 0; }
+      .topbar #openSetup .setup-label { display: none; }
+      .workspace { grid-template-rows: auto auto; }
+      .stage-grid { grid-template-columns: 1fr; }
+      .stage { min-height: 480px; }
+      .inspector { min-height: 420px; }
+      .inspector-content { padding-bottom: 96px; }
+      .timeline { grid-template-columns: 1fr; gap: 12px; }
+      .timeline-meta { justify-content: flex-start; }
+      .setup-content { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 540px) {
+      .topbar { padding: 0 14px; }
+      .topbar .status, .topbar-actions .button.ghost:not(#openSetup) { display: none; }
+      .topbar #openSetup { display: inline-flex; width: 44px; padding: 0; }
+      .topbar #openSetup .setup-label { display: none; }
+      .workspace { padding: 14px 12px 92px; gap: 12px; }
+      .stage { min-height: 390px; }
+      .stage-header { top: 14px; left: 14px; right: 14px; }
+      .stage-hint { left: 14px; bottom: 14px; }
+      .timeline { padding: 14px; }
+      .transport { justify-content: space-between; }
+      .transport .button { flex: 1; }
+      .modal-shell { padding: 12px; }
+      .setup-header, .setup-content, .setup-footer { padding-inline: 18px; }
+      .setup-header { padding-top: 20px; }
+      .setup-stepper { padding-inline: 18px; gap: 12px; }
+      .setup-content { grid-template-columns: 1fr; gap: 22px; padding-top: 20px; }
+      .maker-grid { grid-template-columns: 1fr; }
+      .setup-footer { padding-bottom: 18px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="rail" aria-label="主导航">
+      <div class="brand-mark" aria-label="Motion Lab">ML</div>
+      <nav class="rail-nav">
+        <button class="rail-button" aria-current="page" aria-label="Studio" data-tooltip="Studio"><i data-lucide="aperture" aria-hidden="true"></i></button>
+        <button class="rail-button" aria-label="Motions" data-tooltip="Motions"><i data-lucide="move-3d" aria-hidden="true"></i></button>
+        <button class="rail-button" aria-label="Robots" data-tooltip="Robots"><i data-lucide="bot" aria-hidden="true"></i></button>
+        <button class="rail-button" aria-label="Library" data-tooltip="Library"><i data-lucide="layers-3" aria-hidden="true"></i></button>
+      </nav>
+      <div class="rail-spacer"></div>
+      <button class="rail-button" aria-label="帮助" data-tooltip="Help"><i data-lucide="circle-help" aria-hidden="true"></i></button>
+      <button class="rail-button" aria-label="设置" data-tooltip="Settings"><i data-lucide="settings-2" aria-hidden="true"></i></button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="crumbs">
+          <span class="eyebrow">Studio</span>
+          <span class="slash">/</span>
+          <h1 id="projectTitle">Walk forward · G1 29 DoF</h1>
+        </div>
+        <div class="topbar-actions">
+          <span class="status" id="mujocoStatus">MuJoCo · connecting</span>
+          <button class="button ghost setup-trigger" id="openSetup" type="button" aria-label="配置机器人" aria-haspopup="dialog" aria-controls="setupModal"><i data-lucide="bot" aria-hidden="true"></i><span class="setup-label">配置机器人</span></button>
+          <button class="button ghost" type="button"><i data-lucide="share-2" aria-hidden="true"></i> 分享预览</button>
+          <div class="avatar" aria-label="用户 HY">HY</div>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="动作编辑工作台">
+        <div class="stage-grid">
+          <section class="stage" aria-label="3D 动作视图">
+            <canvas id="scene" aria-label="G1 humanoid motion preview"></canvas>
+            <div class="stage-header">
+              <div class="stage-title">
+                <strong>动作预览</strong>
+                <span>retargeted motion · frame <span id="stageFrame">042</span> / 120</span>
+              </div>
+              <div class="stage-tools">
+                <button class="glass-button" id="resetCamera" type="button" aria-label="重置视角" data-tooltip="重置视角"><i data-lucide="scan" aria-hidden="true"></i></button>
+                <button class="glass-button" id="toggleGrid" type="button" aria-label="显示或隐藏地面网格" data-tooltip="地面网格"><i data-lucide="grid-2x2" aria-hidden="true"></i></button>
+              </div>
+            </div>
+            <div class="stage-hint"><i data-lucide="mouse" aria-hidden="true"></i><span>拖拽旋转 · 滚轮缩放</span><kbd>R</kbd><span>重置</span></div>
+          </section>
+
+          <aside class="inspector" aria-label="动作检查器">
+            <div class="inspector-tabs" role="tablist" aria-label="检查器模式">
+              <button class="tab" role="tab" aria-selected="true" aria-controls="panel-motion" data-panel="panel-motion">动作</button>
+              <button class="tab" role="tab" aria-selected="false" aria-controls="panel-joints" data-panel="panel-joints">关节</button>
+              <button class="tab" role="tab" aria-selected="false" aria-controls="panel-rewards" data-panel="panel-rewards">奖励</button>
+            </div>
+            <div class="inspector-content">
+              <section class="panel active" id="panel-motion" role="tabpanel">
+                <div class="panel-heading"><h2>动作层</h2><p>微调会保存为新的编辑版本。</p></div>
+                <div class="notice"><i data-lucide="info" aria-hidden="true"></i><span>这是浏览器预览。最终 IK 和质量校验将在训练环境中重新计算。</span></div>
+                <div class="keyframe-toolbar">
+                  <button class="button" id="addKeyframe" type="button"><i data-lucide="bookmark-plus" aria-hidden="true"></i> 添加关键帧</button>
+                  <span class="tag" id="frameEditStatus">未编辑</span>
+                </div>
+                <div class="keyframe-list" id="keyframeList" aria-label="关键帧列表"><span class="empty-state">尚未添加关键帧</span></div>
+                <div class="field">
+                  <div class="field-label"><span>动作片段</span><span class="tag success">已校验</span></div>
+                  <select class="select" id="motionSourceSelect" aria-label="动作片段"><option>walk_forward_v04 · 30 FPS</option><option>reach_box_v02 · 30 FPS</option></select>
+                </div>
+                <div class="field">
+                  <div class="field-label"><label for="heightRange">整体高度</label><output id="heightValue">+0.03 m</output></div>
+                  <input id="heightRange" type="range" min="-0.15" max="0.15" step="0.01" value="0.03" />
+                  <div class="range-meta"><span>-0.15 m</span><span>0</span><span>+0.15 m</span></div>
+                </div>
+                <div class="field">
+                  <div class="field-label"><label for="yawRange">初始朝向</label><output id="yawValue">+4.0°</output></div>
+                  <input id="yawRange" type="range" min="-20" max="20" step="0.5" value="4" />
+                  <div class="range-meta"><span>-20°</span><span>0°</span><span>+20°</span></div>
+                </div>
+                <div class="section-divider"></div>
+                <div class="mini-row"><span>轨迹平滑</span><label class="switch"><input type="checkbox" checked aria-label="轨迹平滑" /><span class="switch-track"></span></label></div>
+                <div class="mini-row"><span>脚底接触保护</span><label class="switch"><input type="checkbox" checked aria-label="脚底接触保护" /><span class="switch-track"></span></label></div>
+                <div class="mini-row"><span>编辑版本</span><strong>motion-edit.v03</strong></div>
+              </section>
+
+              <section class="panel" id="panel-joints" role="tabpanel">
+                <div class="panel-heading"><h2>关节微调</h2><p>选择关节，调整局部姿态。</p></div>
+                <div class="field">
+                  <div class="field-label"><label for="jointSelect">当前关节</label><span class="tag" id="jointCountTag">MuJoCo · 29 DoF</span></div>
+                  <select class="select" id="jointSelect" aria-label="当前关节"><option value="left_shoulder_pitch_joint">left_shoulder_pitch_joint</option><option value="right_shoulder_pitch_joint">right_shoulder_pitch_joint</option><option value="left_hip_pitch_joint">left_hip_pitch_joint</option><option value="right_hip_pitch_joint">right_hip_pitch_joint</option></select>
+                </div>
+                <div class="field">
+                  <div class="field-label"><label for="jointRange">目标角度</label><output id="jointValue">0.0°</output></div>
+                  <input id="jointRange" type="range" min="-30" max="30" step="1" value="8" />
+                  <div class="joint-angle-row"><input id="jointAngleInput" type="number" inputmode="decimal" step="0.1" value="0" aria-label="目标角度数值" /><span>°</span><span class="joint-limit" id="jointLimitLabel">限位读取中</span></div>
+                </div>
+                <div class="field">
+                  <div class="field-label"><label for="jointVelocityRange">速度上限</label><output id="jointVelocityValue">1.80 rad/s</output></div>
+                  <input id="jointVelocityRange" type="range" min="0" max="8" step="0.05" value="1.8" />
+                  <div class="range-meta"><span>0</span><span>4</span><span>8 rad/s</span></div>
+                </div>
+                <div class="field">
+                  <div class="field-label"><label for="jointStiffnessRange">执行刚度</label><output id="jointStiffnessValue">50%</output></div>
+                  <input id="jointStiffnessRange" type="range" min="0" max="100" step="1" value="50" />
+                  <div class="range-meta"><span>柔</span><span>中</span><span>硬</span></div>
+                </div>
+                <div class="section-divider"></div>
+                <div class="mini-row"><span>应用范围</span><select class="inline-select" id="jointApplyScope" aria-label="关节调整应用范围"><option value="frame">当前帧</option><option value="segment">当前片段</option><option value="keyframe">当前帧并创建关键帧</option></select></div>
+                <div class="mini-row"><span>关节限位</span><span class="tag success" id="jointLimitStatus">读取中</span></div>
+                <div class="mini-row"><span>选中骨骼</span><strong id="jointHint">MuJoCo joint</strong></div>
+                <div class="joint-actions"><button class="button" id="resetJointButton" type="button"><i data-lucide="rotate-ccw" aria-hidden="true"></i> 恢复本帧</button><button class="button primary" id="applyJointButton" type="button"><i data-lucide="check" aria-hidden="true"></i> 应用调整</button></div>
+              </section>
+
+              <section class="panel" id="panel-rewards" role="tabpanel">
+                <div class="panel-heading"><h2>奖励预览</h2><p>只展示已注册项，当前为本地示例。</p></div>
+                <div class="field">
+                  <div class="field-label"><span>tracking.anchor_pos</span><output id="anchorValue">1.20</output></div>
+                  <input id="anchorRange" type="range" min="0" max="3" step="0.05" value="1.2" aria-label="tracking.anchor_pos" />
+                  <div class="reward-meter blue"><span id="anchorMeter" style="width: 40%"></span></div>
+                </div>
+                <div class="field">
+                  <div class="field-label"><span>regularization.action_rate</span><output id="actionValue">-0.02</output></div>
+                  <input id="actionRange" type="range" min="-0.1" max="0" step="0.005" value="-0.02" aria-label="regularization.action_rate" />
+                  <div class="reward-meter orange"><span id="actionMeter" style="width: 22%"></span></div>
+                </div>
+                <div class="field">
+                  <div class="field-label"><span>tracking.torso_orientation</span><output>0.80</output></div>
+                  <div class="reward-meter green"><span style="width: 68%"></span></div>
+                </div>
+                <div class="section-divider"></div>
+                <div class="mini-row"><span>RewardConfig</span><strong>reward.v02</strong></div>
+                <div class="mini-row"><span>硬终止条件</span><span class="tag warning">3 项锁定</span></div>
+                <button class="button primary" type="button" style="width:100%; margin-top:20px;"><i data-lucide="copy-plus" aria-hidden="true"></i> 复制为新版本</button>
+              </section>
+            </div>
+          </aside>
+        </div>
+
+        <section class="timeline" aria-label="动作时间轴">
+          <div class="transport">
+            <button class="button icon-only" id="playButton" type="button" aria-label="播放或暂停"><i data-lucide="play" id="playIcon" aria-hidden="true"></i></button>
+            <button class="button icon-only" id="stepBack" type="button" aria-label="上一帧"><i data-lucide="skip-back" aria-hidden="true"></i></button>
+            <span class="timecode" id="timecode">00:01.40</span>
+          </div>
+          <div class="timeline-main">
+            <div class="timeline-info"><span><strong>walk_forward_v04</strong> · 30 FPS</span><span id="frameLabel">Frame 042 / 120</span></div>
+            <div class="timeline-track">
+              <div class="timeline-line"></div><div class="timeline-fill" id="timelineFill"></div><div class="timeline-handle" id="timelineHandle"></div><div class="keyframe-markers" id="keyframeMarkers" aria-hidden="true"></div>
+              <input class="timeline-input" id="timelineRange" aria-label="动作时间轴" type="range" min="0" max="120" value="42" />
+            </div>
+            <div class="timeline-markers"><span>00:00</span><span>00:02</span><span>00:04</span></div>
+          </div>
+          <div class="timeline-meta"><span class="tag" id="engineTag">MuJoCo local</span><button class="button icon-only" id="exportFrame" type="button" aria-label="导出当前帧" data-tooltip="导出当前帧"><i data-lucide="download" aria-hidden="true"></i></button><button class="button" id="savePreview" type="button"><i data-lucide="save" aria-hidden="true"></i> 保存预览</button></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-shell" id="setupModal" hidden>
+    <div class="modal-backdrop" data-close-setup></div>
+    <section class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+      <header class="setup-header">
+        <div><h2 id="setupTitle">配置训练对象</h2><p>选择机器人、动作来源和描述文件，进入可编辑的 3D 工作台。</p></div>
+        <button class="setup-close" id="closeSetup" type="button" aria-label="关闭配置窗口"><i data-lucide="x" aria-hidden="true"></i></button>
+      </header>
+      <div class="setup-stepper" aria-label="配置步骤">
+        <span class="setup-step active" data-step="01">机器人</span>
+        <span class="setup-step active" data-step="02">训练源</span>
+        <span class="setup-step" data-step="03">动作工作台</span>
+      </div>
+      <div class="setup-content">
+        <div>
+          <section class="setup-section" aria-labelledby="makerHeading">
+            <h3 id="makerHeading">机器人厂家</h3>
+            <p>品牌资产仅用于识别，最终模型以本地描述文件为准。</p>
+            <div class="maker-grid">
+              <button class="choice-card maker-choice" type="button" data-maker="unitree" aria-pressed="true">
+                <span class="brand-avatar"><img src="https://cdn.simpleicons.org/unitree/1a1f24" alt="Unitree logo" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false;"><span class="brand-fallback" hidden>U</span></span>
+                <span class="choice-copy"><strong>Unitree Robotics</strong><span>宇树 · humanoid</span></span>
+              </button>
+              <button class="choice-card maker-choice" type="button" data-maker="fourier" aria-pressed="false">
+                <span class="brand-avatar"><img src="https://cdn.simpleicons.org/fourier/1a1f24" alt="Fourier logo" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false;"><span class="brand-fallback" hidden>F</span></span>
+                <span class="choice-copy"><strong>Fourier Intelligence</strong><span>傅利叶 · humanoid</span></span>
+              </button>
+              <button class="choice-card maker-choice" type="button" data-maker="booster" aria-pressed="false">
+                <span class="brand-avatar"><img src="https://cdn.simpleicons.org/booster/1a1f24" alt="Booster logo" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false;"><span class="brand-fallback" hidden>B</span></span>
+                <span class="choice-copy"><strong>Booster Robotics</strong><span>Booster · humanoid</span></span>
+              </button>
+            </div>
+            <div class="setup-select"><label for="modelSelect">机器人型号</label><select class="select" id="modelSelect" aria-label="机器人型号"></select></div>
+          </section>
+
+          <section class="setup-section" aria-labelledby="urdfHeading">
+            <h3 id="urdfHeading">机器人描述文件</h3>
+            <p>以 URDF 为运动学入口，网格资源与关节限位一起校验。</p>
+            <label class="dropzone" for="urdfInput"><i data-lucide="file-cog" aria-hidden="true"></i><strong>选择 .urdf 文件</strong><span>默认验证：g1_29dof.urdf · 29 个可动关节</span><input id="urdfInput" type="file" accept=".urdf,.xml,text/xml,application/xml" /></label>
+            <div class="urdf-status"><span id="urdfFileName" class="tag">未选择文件</span><span id="urdfJointCount" class="tag success">G1 29 DoF · 已验证</span></div>
+            <p class="setup-helper">已在本地仓库找到 `unitree_ros/robots/g1_description/g1_29dof.urdf`，其 36 个网格引用均可解析。</p>
+          </section>
+        </div>
+
+        <div>
+          <section class="setup-section" aria-labelledby="sourceHeading">
+            <h3 id="sourceHeading">训练源素材</h3>
+            <p>先选择来源，进入工作台后可在时间轴定位到任意帧。</p>
+            <div class="source-grid">
+              <button class="choice-card source-card" type="button" data-source="cxk_decomp_20260725_full_ikstable_v4_smooth_v4_local_smooth.csv" aria-pressed="true"><span class="source-icon"><i data-lucide="table-2" aria-hidden="true"></i></span><span class="choice-copy"><strong>GMR retarget CSV</strong><span>cxk_decomp…local_smooth.csv · 30 FPS</span></span><span class="tag success">推荐</span></button>
+              <button class="choice-card source-card" type="button" data-source="new_source_20260725_015728.mp4" aria-pressed="false"><span class="source-icon"><i data-lucide="video" aria-hidden="true"></i></span><span class="choice-copy"><strong>动作视频</strong><span>new_source_20260725_015728.mp4 · 参考素材</span></span></button>
+              <button class="choice-card source-card" type="button" data-source="box_lift_reference_v3_mello_synchronized_pickup.csv" aria-pressed="false"><span class="source-icon"><i data-lucide="file-chart-column" aria-hidden="true"></i></span><span class="choice-copy"><strong>RL reference motion</strong><span>box_lift_reference_v3…pickup.csv</span></span></button>
+            </div>
+            <label class="dropzone" for="sourceInput" style="margin-top:10px"><i data-lucide="upload" aria-hidden="true"></i><strong>导入本地素材</strong><span>CSV / NPZ / BVH / MP4 · 仅浏览器本地预览</span><input id="sourceInput" type="file" accept=".csv,.npz,.bvh,.mp4,.json,video/*" /></label>
+            <div class="urdf-status"><span id="sourceFileName" class="tag">已选：GMR retarget CSV</span><span class="tag">本地演示</span></div>
+          </section>
+
+          <section class="setup-section" aria-labelledby="mappingHeading">
+            <h3 id="mappingHeading">映射检查</h3>
+            <p>进入动作工作台前，先确认仿真与显示模型的一致性。</p>
+            <div class="notice"><i data-lucide="shield-check" aria-hidden="true"></i><span>G1 29 DoF 的关节顺序、限位和网格资源将由后端转换器再次校验。</span></div>
+            <div class="mini-row" style="margin-top:14px"><span>Sim2Sim 对齐</span><span class="tag success">MuJoCo XML · 可用</span></div>
+            <div class="mini-row"><span>GMR 运动学</span><span class="tag success">unitree_g1 · 可用</span></div>
+          </section>
+        </div>
+      </div>
+      <footer class="setup-footer"><button class="button ghost" id="cancelSetup" type="button">取消</button><button class="button primary" id="applySetup" type="button"><i data-lucide="arrow-right" aria-hidden="true"></i> 进入动作工作台</button></footer>
+    </section>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+
+    const canvas = document.querySelector("#scene");
+    const stage = document.querySelector(".stage");
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color("#f7f8f8");
+
+    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+    camera.position.set(3.15, 2.05, 5.5);
+    camera.lookAt(0, 1.05, 0);
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.target.set(0, 1.08, 0);
+    controls.minDistance = 2.5;
+    controls.maxDistance = 8;
+    controls.maxPolarAngle = Math.PI * 0.48;
+
+    scene.add(new THREE.HemisphereLight("#ffffff", "#9ca4ab", 2.5));
+    const keyLight = new THREE.DirectionalLight("#ffffff", 3.5);
+    keyLight.position.set(-3, 6, 4);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(1024, 1024);
+    scene.add(keyLight);
+    const rimLight = new THREE.DirectionalLight("#bed1ea", 1.4);
+    rimLight.position.set(4, 3, -3);
+    scene.add(rimLight);
+
+    const robot = new THREE.Group();
+    robot.position.y = 0.02;
+    scene.add(robot);
+
+    const metal = new THREE.MeshStandardMaterial({ color: "#b8c0c6", metalness: .7, roughness: .27 });
+    const metalDark = new THREE.MeshStandardMaterial({ color: "#7b858e", metalness: .75, roughness: .24 });
+    const accent = new THREE.MeshStandardMaterial({ color: "#dfe5eb", metalness: .55, roughness: .22 });
+    const jointMat = new THREE.MeshStandardMaterial({ color: "#303840", metalness: .55, roughness: .26 });
+
+    function box(name, size, material, parent, pos) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(...size), material);
+      mesh.name = name;
+      mesh.position.set(...pos);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      parent.add(mesh);
+      return mesh;
+    }
+
+    function capsule(name, radius, length, material, parent, pos, rot = [0, 0, 0]) {
+      const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 5, 10), material);
+      mesh.name = name;
+      mesh.position.set(...pos);
+      mesh.rotation.set(...rot);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      parent.add(mesh);
+      return mesh;
+    }
+
+    function jointBall(parent, pos) {
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(.075, 16, 12), jointMat);
+      mesh.position.set(...pos);
+      mesh.castShadow = true;
+      parent.add(mesh);
+      return mesh;
+    }
+
+    const pelvis = box("pelvis", [.48, .25, .28], metalDark, robot, [0, 1.28, 0]);
+    const torso = box("torso", [.62, .67, .35], metal, robot, [0, 1.76, 0]);
+    torso.rotation.z = -0.035;
+    box("chest-panel", [.44, .29, .035], accent, torso, [0, .02, .19]);
+    const neck = capsule("neck", .095, .1, jointMat, robot, [0, 2.2, 0]);
+    const head = box("head", [.31, .36, .28], metalDark, robot, [0, 2.43, 0]);
+    box("visor", [.22, .08, .025], accent, head, [0, .04, .145]);
+
+    const rig = { leftShoulder: null, rightShoulder: null, leftHip: null, rightHip: null, grid: null };
+    function buildLeg(side, x) {
+      const hip = new THREE.Group();
+      hip.position.set(x, 1.18, 0);
+      robot.add(hip);
+      jointBall(hip, [0, 0, 0]);
+      const thigh = capsule(`${side}-thigh`, .12, .42, metal, hip, [0, -.32, 0]);
+      const knee = new THREE.Group(); knee.position.set(0, -.65, 0); hip.add(knee); jointBall(knee, [0,0,0]);
+      const shin = capsule(`${side}-shin`, .1, .42, metalDark, knee, [0, -.31, 0]);
+      const foot = box(`${side}-foot`, [.2, .11, .38], metalDark, knee, [0, -.65, .075]);
+      foot.rotation.x = -.06;
+      rig[side === "left" ? "leftHip" : "rightHip"] = { hip, knee, thigh, shin };
+    }
+    buildLeg("left", -.17); buildLeg("right", .17);
+
+    function buildArm(side, x) {
+      const shoulder = new THREE.Group(); shoulder.position.set(x, 1.99, 0); robot.add(shoulder);
+      shoulder.rotation.z = side === "left" ? -.09 : .09;
+      jointBall(shoulder, [0,0,0]);
+      const upper = capsule(`${side}-upper-arm`, .09, .31, metal, shoulder, [side === "left" ? -.13 : .13, -.21, 0], [0, 0, side === "left" ? -.18 : .18]);
+      const elbow = new THREE.Group(); elbow.position.set(side === "left" ? -.26 : .26, -.43, 0); shoulder.add(elbow); jointBall(elbow, [0,0,0]);
+      const fore = capsule(`${side}-forearm`, .075, .32, metalDark, elbow, [side === "left" ? -.1 : .1, -.22, .02], [0, 0, side === "left" ? -.18 : .18]);
+      const hand = box(`${side}-hand`, [.13, .17, .18], accent, elbow, [side === "left" ? -.2 : .2, -.49, .02]);
+      rig[side === "left" ? "leftShoulder" : "rightShoulder"] = { shoulder, elbow, upper, fore, hand };
+    }
+    buildArm("left", -.37); buildArm("right", .37);
+
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.MeshStandardMaterial({ color: "#e8ebed", roughness: .86, metalness: .05 }));
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = .05;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    const grid = new THREE.GridHelper(10, 20, "#cbd2d7", "#e2e6e9");
+    grid.position.y = .058;
+    grid.material.transparent = true;
+    grid.material.opacity = .65;
+    scene.add(grid);
+    rig.grid = grid;
+
+    function resize() {
+      const rect = stage.getBoundingClientRect();
+      const width = Math.max(1, rect.width);
+      const height = Math.max(1, rect.height);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height, false);
+    }
+    new ResizeObserver(resize).observe(stage);
+    resize();
+
+    let frame = 42;
+    let playing = false;
+    const mujocoState = {
+      online: false,
+      model: null,
+      frames: [],
+      keyframes: [],
+      currentFrame: 42,
+      framePose: null,
+      selectedJoint: "left_shoulder_pitch_joint",
+      jointParams: {},
+      requestId: 0,
+    };
+    window.motionLabMujocoState = mujocoState;
+    let last = performance.now();
+    function animate(now) {
+      requestAnimationFrame(animate);
+      const dt = Math.min(.05, (now - last) / 1000); last = now;
+      if (playing) {
+        frame += dt * 30;
+        if (frame > 120) frame = 0;
+        updateTimeline(frame);
+      }
+      const sway = mujocoState.framePose ? 0 : Math.sin(now * .0018) * .018;
+      torso.rotation.z = -.035 + sway;
+      head.rotation.z = sway * .5;
+      if (!mujocoState.framePose) {
+        if (rig.leftShoulder) rig.leftShoulder.shoulder.rotation.z = -.09 - Math.sin(now * .002) * .04;
+        if (rig.rightShoulder) rig.rightShoulder.shoulder.rotation.z = .09 + Math.sin(now * .002) * .04;
+      }
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    requestAnimationFrame(animate);
+
+    function updateTimeline(value) {
+      frame = Number(value);
+      const percent = (frame / 120) * 100;
+      document.querySelector("#timelineFill").style.width = `${percent}%`;
+      document.querySelector("#timelineHandle").style.left = `${percent}%`;
+      document.querySelector("#frameLabel").textContent = `Frame ${String(Math.round(frame)).padStart(3, "0")} / 120`;
+      document.querySelector("#stageFrame").textContent = String(Math.round(frame)).padStart(3, "0");
+      const seconds = frame / 30;
+      document.querySelector("#timecode").textContent = `00:${seconds.toFixed(2).padStart(5, "0")}`;
+      document.querySelector("#timelineRange").value = String(frame);
+      mujocoState.currentFrame = Math.round(frame);
+      document.querySelector("#keyframeList")?.querySelectorAll(".keyframe-chip").forEach((chip) => chip.setAttribute("aria-current", String(Number(chip.dataset.frame) === mujocoState.currentFrame)));
+    }
+
+    document.querySelector("#timelineRange").addEventListener("input", (event) => updateTimeline(event.target.value));
+    document.querySelector("#playButton").addEventListener("click", () => {
+      playing = !playing;
+      document.querySelector("#playIcon").setAttribute("data-lucide", playing ? "pause" : "play");
+      window.lucide?.createIcons();
+    });
+    document.querySelector("#stepBack").addEventListener("click", () => {
+      const targetFrame = Math.max(0, frame - 1);
+      updateTimeline(targetFrame);
+      loadMujocoFrame(targetFrame);
+    });
+    document.querySelector("#resetCamera").addEventListener("click", () => {
+      camera.position.set(3.15, 2.05, 5.5);
+      controls.target.set(0, 1.08, 0);
+      controls.update();
+    });
+    document.querySelector("#toggleGrid").addEventListener("click", () => { rig.grid.visible = !rig.grid.visible; });
+    window.addEventListener("keydown", (event) => { if (event.key.toLowerCase() === "r") document.querySelector("#resetCamera").click(); });
+
+    function bindRange(inputId, outputId, formatter, callback) {
+      const input = document.querySelector(`#${inputId}`);
+      const output = document.querySelector(`#${outputId}`);
+      const update = () => { output.textContent = formatter(Number(input.value)); callback?.(Number(input.value)); };
+      input.addEventListener("input", update); update();
+    }
+    bindRange("heightRange", "heightValue", value => `${value >= 0 ? "+" : ""}${value.toFixed(2)} m`, value => { robot.position.y = .02 + value; });
+    bindRange("yawRange", "yawValue", value => `${value >= 0 ? "+" : ""}${value.toFixed(1)}°`, value => { robot.rotation.y = THREE.MathUtils.degToRad(value); });
+    bindRange("jointRange", "jointValue", value => `${value >= 0 ? "+" : ""}${value.toFixed(1)}°`, value => {
+      const jointName = document.querySelector("#jointSelect").value;
+      const target = rig[jointName];
+      if (target?.shoulder) target.shoulder.rotation.z = (jointName === "leftShoulder" ? -.09 : .09) + THREE.MathUtils.degToRad(value) * (jointName === "leftShoulder" ? -1 : 1);
+      if (target?.hip) target.hip.rotation.z = THREE.MathUtils.degToRad(value) * .3;
+    });
+    document.querySelector("#jointSelect").addEventListener("change", event => {
+      document.querySelector("#jointHint").textContent = event.target.value.includes("Shoulder") ? (event.target.value.startsWith("left") ? "左肩 · 上臂" : "右肩 · 上臂") : (event.target.value.startsWith("left") ? "左髋 · 大腿" : "右髋 · 大腿");
+    });
+    bindRange("anchorRange", "anchorValue", value => value.toFixed(2), value => { document.querySelector("#anchorMeter").style.width = `${Math.min(100, value / 3 * 100)}%`; });
+    bindRange("actionRange", "actionValue", value => value.toFixed(3), value => { document.querySelector("#actionMeter").style.width = `${Math.min(100, Math.abs(value) / .1 * 100)}%`; });
+
+    document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(item => item.setAttribute("aria-selected", String(item === tab)));
+      document.querySelectorAll(".panel").forEach(panel => panel.classList.toggle("active", panel.id === tab.dataset.panel));
+    }));
+
+    const makerConfig = {
+      unitree: { name: "Unitree Robotics", models: ["G1 29 DoF", "G1 23 DoF", "H1 2.0"] },
+      fourier: { name: "Fourier Intelligence", models: ["GR-1", "GR-3", "N1"] },
+      booster: { name: "Booster Robotics", models: ["T1 29 DoF", "T1 23 DoF", "K1"] },
+    };
+    const setupState = { maker: "unitree", model: "G1 29 DoF", source: "cxk_decomp_20260725_full_ikstable_v4_smooth_v4_local_smooth.csv", sourceLabel: "GMR retarget CSV", urdfName: "g1_29dof.urdf" };
+    const setupModal = document.querySelector("#setupModal");
+    const modelSelect = document.querySelector("#modelSelect");
+    const setupToast = document.querySelector("#toast");
+    let lastFocus = null;
+    let toastTimer = null;
+
+    function showToast(message) {
+      setupToast.textContent = message;
+      setupToast.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { setupToast.hidden = true; }, 3600);
+    }
+
+    function renderModels(maker) {
+      const config = makerConfig[maker];
+      modelSelect.innerHTML = config.models.map((model) => `<option value="${model}">${model}</option>`).join("");
+      modelSelect.value = config.models[0];
+      setupState.maker = maker;
+      setupState.model = modelSelect.value;
+    }
+    renderModels(setupState.maker);
+
+    document.querySelectorAll(".maker-choice").forEach((choice) => choice.addEventListener("click", () => {
+      document.querySelectorAll(".maker-choice").forEach((item) => item.setAttribute("aria-pressed", String(item === choice)));
+      renderModels(choice.dataset.maker);
+    }));
+    modelSelect.addEventListener("change", () => { setupState.model = modelSelect.value; });
+
+    document.querySelectorAll(".source-card").forEach((choice) => choice.addEventListener("click", () => {
+      document.querySelectorAll(".source-card").forEach((item) => item.setAttribute("aria-pressed", String(item === choice)));
+      setupState.source = choice.dataset.source;
+      setupState.sourceLabel = choice.querySelector("strong")?.textContent?.trim() || "训练源素材";
+      document.querySelector("#sourceFileName").textContent = `已选：${setupState.sourceLabel}`;
+    }));
+    document.querySelector("#sourceInput").addEventListener("change", (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      setupState.source = file.name;
+      setupState.sourceLabel = "本地导入素材";
+      document.querySelector("#sourceFileName").textContent = file.name;
+      showToast(`已载入本地素材：${file.name}`);
+    });
+
+    document.querySelector("#openSetup").addEventListener("click", () => {
+      lastFocus = document.activeElement;
+      setupModal.hidden = false;
+      document.querySelector("#closeSetup").focus();
+    });
+    function closeSetup() {
+      setupModal.hidden = true;
+      lastFocus?.focus?.();
+    }
+    document.querySelector("#closeSetup").addEventListener("click", closeSetup);
+    document.querySelector("#cancelSetup").addEventListener("click", closeSetup);
+    document.querySelectorAll("[data-close-setup]").forEach((node) => node.addEventListener("click", closeSetup));
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !setupModal.hidden) closeSetup();
+    });
+    document.querySelector("#applySetup").addEventListener("click", () => {
+      setupState.model = modelSelect.value;
+      document.querySelector("#projectTitle").textContent = `Walk forward · ${setupState.model}`;
+      document.querySelector("#motionSourceSelect").value = "walk_forward_v04 · 30 FPS";
+      closeSetup();
+      showToast(`${makerConfig[setupState.maker].name} · ${setupState.model} 已进入动作工作台`);
+    });
+
+    const urdfJointLimits = new Map();
+    const jointSelect = document.querySelector("#jointSelect");
+    const jointRange = document.querySelector("#jointRange");
+    const jointHint = document.querySelector("#jointHint");
+    function updateJointHint() {
+      const selected = jointSelect.value;
+      if (selected.includes("Shoulder")) jointHint.textContent = selected.startsWith("left") ? "左肩 · 上臂" : "右肩 · 上臂";
+      else if (selected.includes("Hip")) jointHint.textContent = selected.startsWith("left") ? "左髋 · 大腿" : "右髋 · 大腿";
+      else if (urdfJointLimits.has(selected)) jointHint.textContent = `URDF · ${selected}`;
+      else jointHint.textContent = "G1 29 DoF · 可调关节";
+    }
+    function applyJointLimit() {
+      const limit = urdfJointLimits.get(jointSelect.value);
+      if (limit) {
+        jointRange.min = String(limit.lower);
+        jointRange.max = String(limit.upper);
+        jointRange.step = "0.5";
+        const current = Math.min(limit.upper, Math.max(limit.lower, Number(jointRange.value)));
+        jointRange.value = String(current);
+        jointRange.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      updateJointHint();
+    }
+    jointSelect.addEventListener("change", applyJointLimit);
+
+    document.querySelector("#urdfInput").addEventListener("change", async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      setupState.urdfName = file.name;
+      document.querySelector("#urdfFileName").textContent = file.name;
+      try {
+        const xmlText = await file.text();
+        const xml = new DOMParser().parseFromString(xmlText, "application/xml");
+        const parseError = xml.querySelector("parsererror");
+        if (parseError) throw new Error("XML parse error");
+        const joints = [...xml.querySelectorAll("joint")].filter((joint) => ["revolute", "continuous", "prismatic"].includes(joint.getAttribute("type")));
+        urdfJointLimits.clear();
+        joints.forEach((joint) => {
+          const limit = joint.querySelector("limit");
+          const lower = Number(limit?.getAttribute("lower"));
+          const upper = Number(limit?.getAttribute("upper"));
+          if (Number.isFinite(lower) && Number.isFinite(upper)) urdfJointLimits.set(joint.getAttribute("name"), { lower: THREE.MathUtils.radToDeg(lower), upper: THREE.MathUtils.radToDeg(upper) });
+          if (joint.getAttribute("name") && ![...jointSelect.options].some((option) => option.value === joint.getAttribute("name"))) jointSelect.add(new Option(joint.getAttribute("name"), joint.getAttribute("name")));
+        });
+        document.querySelector("#urdfJointCount").textContent = `URDF · ${joints.length} 个可动关节`;
+        document.querySelector("#urdfJointCount").className = "tag success";
+        showToast(`${file.name} 已解析：${joints.length} 个可动关节`);
+      } catch (error) {
+        document.querySelector("#urdfJointCount").textContent = "URDF XML 解析失败";
+        document.querySelector("#urdfJointCount").className = "tag warning";
+        showToast("URDF 文件无法解析，请检查 XML 格式");
+      }
+    });
+
+    const mujocoApiBase = "http://127.0.0.1:8787/api/mujoco";
+    const fallbackJointSpecs = [
+      "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint", "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+      "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint", "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+      "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint", "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+      "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint", "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+    ].map((name) => ({ name, lowerDeg: -180, upperDeg: 180, defaultDeg: 0, limited: false }));
+
+    function fallbackModel() {
+      return { name: "g1_mocap_29dof", engine: "MuJoCo fallback", nq: 36, nv: 35, jointCount: fallbackJointSpecs.length, joints: fallbackJointSpecs };
+    }
+
+    async function mujocoFetch(path, options = {}) {
+      const response = await fetch(`${mujocoApiBase}${path}`, { headers: { "Content-Type": "application/json" }, ...options });
+      if (!response.ok) throw new Error(`MuJoCo API ${response.status}`);
+      return response.json();
+    }
+
+    function updateMujocoStatus(label, tone = "") {
+      const node = document.querySelector("#mujocoStatus");
+      node.textContent = label;
+      node.className = `status ${tone}`.trim();
+      document.querySelector("#engineTag").textContent = mujocoState.online ? "MuJoCo live" : "Local edit fallback";
+    }
+
+    function renderJointOptions(joints) {
+      const current = mujocoState.selectedJoint || joints[0]?.name;
+      jointSelect.innerHTML = joints.map((joint) => `<option value="${joint.name}">${joint.name}</option>`).join("");
+      jointSelect.value = joints.some((joint) => joint.name === current) ? current : joints[0]?.name;
+      mujocoState.selectedJoint = jointSelect.value;
+      document.querySelector("#jointCountTag").textContent = `MuJoCo · ${joints.length} DoF`;
+      renderJointDetails();
+    }
+
+    function selectedJointSpec() {
+      return mujocoState.model?.joints?.find((joint) => joint.name === jointSelect.value) || fallbackJointSpecs.find((joint) => joint.name === jointSelect.value) || fallbackJointSpecs[0];
+    }
+
+    function selectedJointPose() {
+      return mujocoState.framePose?.joints?.find((joint) => joint.name === jointSelect.value);
+    }
+
+    function renderJointDetails() {
+      const spec = selectedJointSpec();
+      const pose = selectedJointPose();
+      if (!spec) return;
+      const value = pose?.angleDeg ?? spec.defaultDeg ?? 0;
+      const lower = pose?.lowerDeg ?? spec.lowerDeg ?? -180;
+      const upper = pose?.upperDeg ?? spec.upperDeg ?? 180;
+      jointRange.min = String(lower);
+      jointRange.max = String(upper);
+      jointRange.step = "0.1";
+      jointRange.value = String(value);
+      document.querySelector("#jointAngleInput").min = String(lower);
+      document.querySelector("#jointAngleInput").max = String(upper);
+      document.querySelector("#jointAngleInput").value = Number(value).toFixed(1);
+      document.querySelector("#jointLimitLabel").textContent = `[${lower.toFixed(1)}°, ${upper.toFixed(1)}°]`;
+      const inLimit = value >= lower - .001 && value <= upper + .001;
+      document.querySelector("#jointLimitStatus").textContent = spec.limited === false || inLimit ? "正常" : "超限";
+      document.querySelector("#jointLimitStatus").className = `tag ${inLimit ? "success" : "warning"}`;
+      document.querySelector("#jointHint").textContent = jointLabel(jointSelect.value);
+      document.querySelector("#jointValue").textContent = `${value >= 0 ? "+" : ""}${Number(value).toFixed(1)}°`;
+    }
+
+    function jointLabel(name) {
+      const side = name.startsWith("left") ? "左" : name.startsWith("right") ? "右" : "中线";
+      if (name.includes("shoulder")) return `${side}肩 · ${name.includes("pitch") ? "俯仰" : name.includes("roll") ? "侧摆" : "偏航"}`;
+      if (name.includes("hip")) return `${side}髋 · ${name.includes("pitch") ? "俯仰" : name.includes("roll") ? "侧摆" : "偏航"}`;
+      if (name.includes("knee")) return `${side}膝 · 屈伸`;
+      if (name.includes("ankle")) return `${side}踝 · ${name.includes("pitch") ? "俯仰" : "侧摆"}`;
+      if (name.includes("elbow")) return `${side}肘 · 屈伸`;
+      if (name.includes("wrist")) return `${side}腕 · 姿态`;
+      if (name.includes("waist")) return `腰部 · ${name.replace("waist_", "")}`;
+      return name;
+    }
+
+    function renderKeyframes() {
+      const list = document.querySelector("#keyframeList");
+      const markers = document.querySelector("#keyframeMarkers");
+      if (!mujocoState.keyframes.length) {
+        list.innerHTML = `<span class="empty-state">尚未添加关键帧</span>`;
+        markers.innerHTML = "";
+        return;
+      }
+      list.innerHTML = mujocoState.keyframes.map((keyframe) => `<button class="keyframe-chip" type="button" data-frame="${keyframe.frame}" aria-current="${keyframe.frame === mujocoState.currentFrame}"><i data-lucide="bookmark" aria-hidden="true"></i><span>${keyframe.label}</span><small>F${String(keyframe.frame).padStart(3, "0")}</small></button>`).join("");
+      markers.innerHTML = mujocoState.keyframes.map((keyframe) => `<span class="keyframe-marker" title="${keyframe.label}" style="left:${(keyframe.frame / 120) * 100}%"></span>`).join("");
+      list.querySelectorAll(".keyframe-chip").forEach((chip) => chip.addEventListener("click", () => {
+        const targetFrame = Number(chip.dataset.frame);
+        updateTimeline(targetFrame);
+        loadMujocoFrame(targetFrame);
+      }));
+      window.lucide?.createIcons({ attrs: { "stroke-width": 1.7 } });
+    }
+
+    function makeFallbackFrame(frameNumber) {
+      const phase = 2 * Math.PI * frameNumber / 120;
+      const joints = fallbackJointSpecs.map((spec) => {
+        let angle = 0;
+        if (spec.name.includes("hip_pitch")) angle = 10 * Math.sin(phase + (spec.name.startsWith("left") ? Math.PI : 0));
+        if (spec.name.includes("knee")) angle = 18 + 8 * Math.max(0, Math.sin(phase + (spec.name.startsWith("left") ? Math.PI : 0)));
+        if (spec.name.includes("elbow")) angle = 46;
+        return { name: spec.name, angleDeg: angle, angleRad: THREE.MathUtils.degToRad(angle), lowerDeg: -180, upperDeg: 180, limited: false };
+      });
+      return { frame: frameNumber, timeSec: frameNumber / 30, fps: 30, qpos: [], joints, root: { x: 0, y: 0, z: .79 }, overrideCount: 0, engine: "Local fallback" };
+    }
+
+    function applyPoseToVisual(payload) {
+      mujocoState.framePose = payload;
+      const byName = new Map(payload.joints.map((joint) => [joint.name, joint.angleDeg]));
+      const radians = (name) => THREE.MathUtils.degToRad(byName.get(name) || 0);
+      const leftShoulder = rig.leftShoulder?.shoulder;
+      const rightShoulder = rig.rightShoulder?.shoulder;
+      if (leftShoulder) {
+        leftShoulder.rotation.z = -.09 - radians("left_shoulder_roll_joint");
+        leftShoulder.rotation.x = radians("left_shoulder_pitch_joint") * .45;
+        rig.leftShoulder.elbow.rotation.z = -radians("left_elbow_joint") * .35;
+      }
+      if (rightShoulder) {
+        rightShoulder.rotation.z = .09 + radians("right_shoulder_roll_joint");
+        rightShoulder.rotation.x = radians("right_shoulder_pitch_joint") * .45;
+        rig.rightShoulder.elbow.rotation.z = radians("right_elbow_joint") * .35;
+      }
+      if (rig.leftHip) {
+        rig.leftHip.hip.rotation.x = radians("left_hip_pitch_joint") * .25;
+        rig.leftHip.hip.rotation.z = radians("left_hip_roll_joint") * .3;
+        rig.leftHip.knee.rotation.x = radians("left_knee_joint") * .25;
+      }
+      if (rig.rightHip) {
+        rig.rightHip.hip.rotation.x = radians("right_hip_pitch_joint") * .25;
+        rig.rightHip.hip.rotation.z = radians("right_hip_roll_joint") * .3;
+        rig.rightHip.knee.rotation.x = radians("right_knee_joint") * .25;
+      }
+      renderJointDetails();
+      document.querySelector("#frameEditStatus").textContent = payload.overrideCount ? `${payload.overrideCount} 项覆盖` : "未编辑";
+    }
+
+    async function loadMujocoFrame(frameNumber) {
+      const target = Math.max(0, Math.min(120, Math.round(Number(frameNumber))));
+      const requestId = ++mujocoState.requestId;
+      try {
+        const payload = mujocoState.online ? await mujocoFetch(`/frames/${target}`) : makeFallbackFrame(target);
+        if (requestId !== mujocoState.requestId) return;
+        applyPoseToVisual(payload);
+      } catch (error) {
+        mujocoState.online = false;
+        updateMujocoStatus("MuJoCo · fallback", "warning");
+        applyPoseToVisual(makeFallbackFrame(target));
+      }
+    }
+
+    async function applyJointValue(angleDeg, createKeyframe = false) {
+      const spec = selectedJointSpec();
+      if (!spec) return;
+      const requested = Number(angleDeg);
+      const value = Math.max(Number(spec.lowerDeg ?? -180), Math.min(Number(spec.upperDeg ?? 180), requested));
+      document.querySelector("#jointAngleInput").value = value.toFixed(1);
+      jointRange.value = String(value);
+      const params = mujocoState.jointParams[jointSelect.value] ||= { velocity: 1.8, stiffness: 50 };
+      params.velocity = Number(document.querySelector("#jointVelocityRange").value);
+      params.stiffness = Number(document.querySelector("#jointStiffnessRange").value);
+      const scope = document.querySelector("#jointApplyScope").value;
+      try {
+        if (mujocoState.online) {
+          if (scope === "segment") {
+            const frames = Array.from({ length: 31 }, (_, index) => Math.max(0, Math.min(120, mujocoState.currentFrame - 15 + index)));
+            const result = await mujocoFetch("/frames/batch/joints", { method: "POST", body: JSON.stringify({ frames, joint: jointSelect.value, angleDeg: value }) });
+            applyPoseToVisual(result.current || await mujocoFetch(`/frames/${mujocoState.currentFrame}`));
+            document.querySelector("#frameEditStatus").textContent = `F${String(mujocoState.currentFrame).padStart(3, "0")} · 片段已编辑`;
+          } else {
+            const payload = await mujocoFetch(`/frames/${mujocoState.currentFrame}/joints`, { method: "POST", body: JSON.stringify({ joint: jointSelect.value, angleDeg: value }) });
+            applyPoseToVisual(payload);
+          }
+        } else {
+          const pose = mujocoState.framePose || makeFallbackFrame(mujocoState.currentFrame);
+          const target = pose.joints.find((joint) => joint.name === jointSelect.value);
+          if (target) target.angleDeg = value;
+          applyPoseToVisual({ ...pose, overrideCount: (pose.overrideCount || 0) + 1 });
+        }
+        if (scope !== "segment") document.querySelector("#frameEditStatus").textContent = `F${String(mujocoState.currentFrame).padStart(3, "0")} · 已编辑`;
+        if (createKeyframe) await addKeyframe();
+      } catch (error) {
+        showToast(`关节调整失败：${error.message}`);
+      }
+    }
+
+    async function addKeyframe() {
+      const label = `关键帧 ${String(mujocoState.currentFrame).padStart(3, "0")}`;
+      try {
+        const keyframe = mujocoState.online ? await mujocoFetch("/keyframes", { method: "POST", body: JSON.stringify({ frame: mujocoState.currentFrame, label }) }) : { id: `local-${mujocoState.currentFrame}`, frame: mujocoState.currentFrame, label, createdAt: new Date().toISOString(), jointCount: mujocoState.framePose?.joints?.length || 0, engine: "Local fallback" };
+        mujocoState.keyframes = [...mujocoState.keyframes.filter((item) => item.frame !== keyframe.frame), keyframe].sort((a, b) => a.frame - b.frame);
+        renderKeyframes();
+        showToast(`${label} 已保存`);
+      } catch (error) {
+        showToast(`关键帧保存失败：${error.message}`);
+      }
+    }
+
+    async function buildExportPayload() {
+      const metadata = { robot: setupState.model, manufacturer: makerConfig[setupState.maker].name, source: setupState.source, urdf: setupState.urdfName, root: { heightOffsetM: Number(document.querySelector("#heightRange").value), yawOffsetDeg: Number(document.querySelector("#yawRange").value) }, jointParams: mujocoState.jointParams };
+      if (mujocoState.online) return mujocoFetch("/export", { method: "POST", body: JSON.stringify({ frame: mujocoState.currentFrame, frames: [mujocoState.currentFrame], metadata }) });
+      return { format: "mujoco.pose.v1", engine: "Local fallback", fps: 30, frames: [mujocoState.framePose || makeFallbackFrame(mujocoState.currentFrame)], keyframes: mujocoState.keyframes, metadata, exportedAt: new Date().toISOString() };
+    }
+
+    async function exportCurrentFrame() {
+      try {
+        const payload = await buildExportPayload();
+        const frameNumber = mujocoState.currentFrame;
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${setupState.model.replace(/\s+/g, "-").toLowerCase()}-mujoco-frame-${String(frameNumber).padStart(3, "0")}.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+        showToast(`MuJoCo Frame ${String(frameNumber).padStart(3, "0")} 已导出`);
+      } catch (error) {
+        showToast(`导出失败：${error.message}`);
+      }
+    }
+
+    async function initializeMujocoEditor() {
+      try {
+        await mujocoFetch("/health");
+        mujocoState.model = await mujocoFetch("/model");
+        const frameIndex = await mujocoFetch("/frames?count=121");
+        const keyframeData = await mujocoFetch("/keyframes");
+        mujocoState.frames = frameIndex.frames;
+        mujocoState.keyframes = keyframeData.keyframes || [];
+        mujocoState.online = true;
+        updateMujocoStatus(`MuJoCo live · ${mujocoState.model.jointCount} joints`, "success");
+        renderJointOptions(mujocoState.model.joints);
+        renderKeyframes();
+        await loadMujocoFrame(frame);
+      } catch (error) {
+        mujocoState.model = fallbackModel();
+        mujocoState.online = false;
+        updateMujocoStatus("MuJoCo service offline · local edit", "warning");
+        renderJointOptions(mujocoState.model.joints);
+        renderKeyframes();
+        await loadMujocoFrame(frame);
+      }
+    }
+
+    document.querySelector("#timelineRange").addEventListener("input", (event) => loadMujocoFrame(event.target.value));
+    jointSelect.addEventListener("change", () => { mujocoState.selectedJoint = jointSelect.value; renderJointDetails(); });
+    jointRange.addEventListener("input", () => {
+      const value = Number(jointRange.value);
+      document.querySelector("#jointAngleInput").value = value.toFixed(1);
+      document.querySelector("#jointValue").textContent = `${value >= 0 ? "+" : ""}${value.toFixed(1)}°`;
+    });
+    document.querySelector("#jointAngleInput").addEventListener("input", (event) => {
+      const value = Number(event.target.value);
+      if (Number.isFinite(value)) {
+        jointRange.value = String(value);
+        document.querySelector("#jointValue").textContent = `${value >= 0 ? "+" : ""}${value.toFixed(1)}°`;
+      }
+    });
+    document.querySelector("#jointVelocityRange").addEventListener("input", (event) => { document.querySelector("#jointVelocityValue").textContent = `${Number(event.target.value).toFixed(2)} rad/s`; });
+    document.querySelector("#jointStiffnessRange").addEventListener("input", (event) => { document.querySelector("#jointStiffnessValue").textContent = `${Number(event.target.value).toFixed(0)}%`; });
+    document.querySelector("#applyJointButton").addEventListener("click", () => applyJointValue(document.querySelector("#jointAngleInput").value, document.querySelector("#jointApplyScope").value === "keyframe"));
+    document.querySelector("#resetJointButton").addEventListener("click", async () => {
+      const spec = selectedJointSpec();
+      if (!spec) return;
+      if (mujocoState.online) {
+        try { const payload = await mujocoFetch(`/frames/${mujocoState.currentFrame}/joints`, { method: "POST", body: JSON.stringify({ joint: spec.name, angleDeg: spec.defaultDeg || 0 }) }); applyPoseToVisual(payload); } catch (error) { showToast(`恢复失败：${error.message}`); }
+      } else await applyJointValue(spec.defaultDeg || 0);
+      showToast(`${spec.name} 已恢复本帧默认值`);
+    });
+    document.querySelector("#addKeyframe").addEventListener("click", addKeyframe);
+    document.querySelector("#savePreview").addEventListener("click", async () => {
+      try { const payload = await buildExportPayload(); localStorage.setItem("motionLabMujocoDraft", JSON.stringify(payload)); showToast(`Frame ${String(mujocoState.currentFrame).padStart(3, "0")} 已保存到本地草稿`); } catch (error) { showToast(`保存失败：${error.message}`); }
+    });
+    initializeMujocoEditor();
+
+    document.querySelector("#exportFrame").addEventListener("click", exportCurrentFrame);
+
+    window.lucide?.createIcons();
+  </script>
+</body>
+</html>

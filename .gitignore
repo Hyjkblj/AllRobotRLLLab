@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+frontend-prototype/react-app/dist/
+frontend-prototype/.runtime/
+.runtime/
+.env
+.env.*
+
+# Third-party repositories, simulator SDKs, meshes, checkpoints and model
+# weights are installed outside this repository. See README.md for pinned
+# versions and setup commands.
+third_party/*
+!third_party/README.md

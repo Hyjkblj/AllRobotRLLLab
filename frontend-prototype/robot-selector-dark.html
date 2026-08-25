@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#050608" />
+  <title>Motion Lab · 选择机器人</title>
+  <meta name="description" content="Motion Lab immersive robot selector prototype." />
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050608;
+      --surface: #0b0e12;
+      --surface-2: #10151a;
+      --line: #293038;
+      --line-soft: rgba(168, 185, 198, .18);
+      --text: #f4f7f8;
+      --muted: #98a5ae;
+      --faint: #65717a;
+      --accent: #86d8ff;
+      --accent-strong: #44b9ef;
+      --accent-soft: rgba(88, 194, 241, .16);
+      --ease: cubic-bezier(.2, .75, .25, 1);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; min-height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      letter-spacing: 0;
+    }
+    button { min-width: 44px; min-height: 44px; font: inherit; color: inherit; touch-action: manipulation; }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+    .selector-shell {
+      position: relative;
+      isolation: isolate;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+      width: 100%;
+      min-height: 100dvh;
+      padding: max(12px, env(safe-area-inset-top)) clamp(16px, 4vw, 56px) max(12px, env(safe-area-inset-bottom));
+      overflow: clip;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px) 0 0 / 80px 80px,
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px) 0 0 / 80px 80px,
+        #050608;
+    }
+    .selector-shell::before {
+      content: "";
+      position: absolute;
+      z-index: -1;
+      inset: 18% 25% 16%;
+      pointer-events: none;
+      background: radial-gradient(ellipse at center, rgba(71, 167, 214, .16), rgba(5, 6, 8, 0) 67%);
+    }
+    .selector-shell::after {
+      content: "";
+      position: absolute;
+      z-index: -1;
+      right: -18vw;
+      bottom: -32vh;
+      width: 60vw;
+      height: 60vw;
+      pointer-events: none;
+      border: 1px solid rgba(137, 159, 174, .1);
+      border-radius: 50%;
+      transform: rotate(-16deg);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      min-height: 36px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
+    .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid rgba(255,255,255,.38); border-radius: 50%; color: var(--text); font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+    .brand-copy strong { display: block; font-size: 12px; font-weight: 700; letter-spacing: .06em; }
+    .brand-copy span { display: block; margin-top: 1px; color: var(--faint); font-size: 9px; letter-spacing: .18em; text-transform: uppercase; }
+    .topbar-meta { display: flex; align-items: center; gap: 16px; color: var(--muted); font-size: 11px; }
+    .topbar-meta .live { display: inline-flex; align-items: center; gap: 7px; }
+    .topbar-meta .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-strong); box-shadow: 0 0 14px rgba(68,185,239,.8); }
+    .topbar-meta a { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; }
+    .topbar-meta a:hover { color: var(--text); }
+
+    .rail-section { min-width: 0; padding-top: 12px; }
+    .rail-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+    .rail-heading strong { font-size: 11px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    .rail-heading span { color: var(--faint); font-size: 10px; }
+    .rail {
+      display: flex;
+      align-items: stretch;
+      gap: 10px;
+      min-width: 0;
+      overflow-x: auto;
+      padding: 2px 1px 9px;
+      scrollbar-width: none;
+      scroll-snap-type: x proximity;
+      overscroll-behavior-x: contain;
+    }
+    .rail::-webkit-scrollbar { display: none; }
+    .maker-item, .model-item {
+      position: relative;
+      flex: 0 0 auto;
+      display: grid;
+      align-items: center;
+      border: 1px solid var(--line-soft);
+      background: rgba(13, 17, 21, .78);
+      color: var(--muted);
+      cursor: pointer;
+      scroll-snap-align: center;
+      transition: color 220ms var(--ease), border-color 220ms var(--ease), background 220ms var(--ease), transform 220ms var(--ease), box-shadow 220ms var(--ease);
+    }
+    .maker-item { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 8px; width: min(230px, 40vw); min-height: 74px; padding: 7px 10px; text-align: center; }
+    .maker-item:hover, .model-item:hover { border-color: rgba(169, 193, 205, .54); color: var(--text); background: rgba(20, 26, 31, .94); }
+    .maker-item:active, .model-item:active { transform: scale(.985); }
+    .maker-item.is-active, .model-item.is-active {
+      border-color: var(--accent);
+      background: linear-gradient(135deg, rgba(100, 195, 239, .17), rgba(12, 20, 25, .9));
+      color: var(--text);
+      box-shadow: 0 0 0 1px rgba(134, 216, 255, .14), 0 0 26px rgba(68, 185, 239, .18);
+    }
+    .maker-item.is-active::after, .model-item.is-active::after { content: ""; position: absolute; right: 11px; bottom: 7px; width: 20px; height: 2px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 9px rgba(134,216,255,.9); }
+    .logo-box { display: grid; place-items: center; width: 34px; height: 34px; overflow: hidden; border: 1px solid rgba(185, 204, 214, .32); border-radius: 9px; background: #e7ecee; color: #0d1317; font-size: 14px; font-weight: 800; }
+    .logo-box img { width: 25px; height: 25px; object-fit: contain; }
+    .maker-item .logo-box { grid-column: 1; grid-row: 1; justify-self: center; }
+    .maker-item.is-active .logo-box { border-color: rgba(217, 245, 255, .78); box-shadow: 0 0 14px rgba(126, 214, 248, .3); }
+    .logo-fallback { display: none; }
+    .logo-fallback.show { display: block; }
+    .maker-copy, .model-copy { min-width: 0; }
+    .maker-copy { grid-column: 1; grid-row: 2; text-align: center; }
+    .maker-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 650; }
+    .maker-cn { display: block; margin-top: 1px; color: var(--faint); font-size: 11px; }
+    .maker-item.is-active .maker-cn, .model-item.is-active .model-cn { color: #bfe9f8; }
+    .rail-index { grid-column: 2; grid-row: 1 / span 2; align-self: start; margin-left: auto; color: var(--faint); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .maker-item.is-active .rail-index, .model-item.is-active .rail-index { color: var(--accent); }
+
+    .showcase {
+      position: relative;
+      display: grid;
+      place-items: center;
+      min-height: 0;
+      padding: 10px 0 0;
+    }
+    .showcase::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: 9%;
+      width: min(560px, 68vw);
+      height: 28px;
+      border-radius: 50%;
+      transform: translateX(-50%);
+      background: rgba(90, 168, 203, .15);
+      filter: blur(20px);
+      pointer-events: none;
+    }
+    .showcase-inner { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; align-items: center; width: min(940px, 100%); height: 100%; min-height: 0; text-align: center; }
+    .selection-label { display: inline-flex; align-items: center; justify-content: center; gap: 10px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .22em; text-transform: uppercase; }
+    .selection-label::before, .selection-label::after { content: ""; width: clamp(24px, 7vw, 84px); height: 1px; background: linear-gradient(90deg, transparent, var(--accent)); }
+    .selection-label::after { transform: rotate(180deg); }
+    .hero-copy { margin-top: 5px; }
+    .hero-maker { color: var(--muted); font-size: 12px; }
+    .hero-title { margin: 2px 0 0; font-size: clamp(24px, 3.2vw, 44px); line-height: 1.08; font-weight: 650; letter-spacing: -.02em; }
+    .hero-title small { margin-left: 8px; color: var(--accent); font-size: .45em; font-weight: 600; vertical-align: middle; letter-spacing: .08em; }
+    .robot-stage { position: relative; display: grid; place-items: center; width: 100%; height: clamp(190px, 33vh, 300px); min-height: 0; margin: 4px 0; overflow: hidden; border-top: 1px solid rgba(154, 181, 194, .12); border-bottom: 1px solid rgba(154, 181, 194, .12); }
+    .robot-stage::before { content: ""; position: absolute; inset: 7% 22%; border: 1px solid rgba(135, 190, 213, .17); border-radius: 50% 50% 42% 42%; transform: perspective(420px) rotateX(61deg); box-shadow: 0 0 34px rgba(71, 171, 211, .1); pointer-events: none; }
+    .robot-stage::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(5,6,8,.8), transparent 22%, transparent 78%, rgba(5,6,8,.8)); pointer-events: none; }
+    .robot-image { position: relative; z-index: 1; display: block; width: min(760px, 76vw); height: 100%; max-width: 100%; max-height: 100%; min-height: 0; object-fit: contain; object-position: center; filter: saturate(.86) contrast(1.1) drop-shadow(0 18px 30px rgba(87, 184, 222, .18)); transition: opacity 220ms var(--ease), transform 320ms var(--ease), filter 220ms var(--ease); }
+    .robot-image.is-changing { opacity: .28; transform: scale(.985); }
+    .robot-fallback { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--muted); text-align: center; }
+    .robot-fallback[hidden] { display: none; }
+    .robot-fallback strong { color: var(--text); font-size: 28px; font-weight: 650; }
+    .robot-fallback span { font-size: 12px; }
+    .hero-meta { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 10px 16px; margin: 0 0 3px; color: var(--muted); font-size: 11px; }
+    .hero-meta span { display: inline-flex; align-items: center; gap: 6px; }
+    .hero-meta span + span::before { content: ""; width: 3px; height: 3px; border-radius: 50%; background: var(--accent-strong); }
+    .hero-meta strong { color: var(--text); font-weight: 650; }
+
+    .model-section { min-width: 0; padding-top: 8px; }
+    .model-section .rail-heading { margin-bottom: 8px; }
+    .model-rail { justify-content: center; }
+    .model-item { display: grid; grid-template-columns: auto minmax(104px, 1fr) auto; gap: 11px; width: min(255px, 42vw); min-height: 44px; padding: 7px 11px; text-align: left; }
+    .model-icon { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid rgba(179, 196, 206, .3); border-radius: 50%; color: var(--muted); }
+    .model-item.is-active .model-icon { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 14px rgba(134,216,255,.2); }
+    .model-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+    .model-cn { display: block; margin-top: 1px; color: var(--faint); font-size: 11px; }
+    .model-dof { color: var(--faint); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
+    .model-item.is-active .model-dof { color: var(--accent); }
+
+    .bottom-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 44px; padding-top: 6px; border-top: 1px solid var(--line-soft); }
+    .help-text { display: inline-flex; align-items: center; gap: 8px; color: var(--faint); font-size: 11px; }
+    .help-text kbd { min-width: 23px; padding: 2px 5px; border: 1px solid rgba(165, 185, 196, .28); border-bottom-width: 2px; border-radius: 4px; color: var(--muted); font: 10px ui-monospace, SFMono-Regular, Consolas, monospace; text-align: center; }
+    .actions { display: flex; align-items: center; gap: 8px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 15px; border: 1px solid var(--line); border-radius: 6px; background: rgba(14, 18, 22, .85); color: var(--muted); cursor: pointer; transition: border-color 180ms var(--ease), background 180ms var(--ease), color 180ms var(--ease), transform 180ms var(--ease); }
+    .button:hover { border-color: rgba(178, 205, 217, .62); color: var(--text); background: #151b20; }
+    .button:active { transform: translateY(1px); }
+    .button.primary { border-color: var(--accent); background: var(--accent); color: #071017; font-weight: 700; }
+    .button.primary:hover { background: #a9e5ff; }
+    .toast { position: fixed; z-index: 20; left: 50%; bottom: 74px; max-width: min(420px, calc(100vw - 32px)); padding: 10px 14px; border: 1px solid rgba(133, 216, 255, .46); border-radius: 6px; background: rgba(8, 16, 21, .94); color: #c7efff; box-shadow: 0 10px 30px rgba(0,0,0,.35); transform: translateX(-50%); font-size: 12px; text-align: center; }
+    .toast[hidden] { display: none; }
+
+    @media (max-width: 760px) {
+      body { overflow-y: auto; }
+      .selector-shell { min-height: 100dvh; grid-template-rows: auto auto minmax(350px, 1fr) auto auto; padding-inline: 14px; overflow-x: clip; overflow-y: clip; }
+      .selector-shell::after { bottom: 0; }
+      .topbar-meta .live, .topbar-meta a span { display: none; }
+      .topbar-meta a { min-width: 44px; justify-content: center; }
+      .maker-item { width: 210px; }
+      .maker-rail { justify-content: flex-start; }
+      .showcase { min-height: 430px; padding-top: 14px; }
+      .showcase-inner { min-height: 430px; }
+      .robot-stage { height: 300px; }
+      .robot-image { width: 100%; max-height: 300px; }
+      .robot-stage { margin-inline: -2px; }
+      .model-rail { justify-content: flex-start; }
+      .model-item { width: 220px; }
+      .bottom-bar { align-items: stretch; flex-direction: column; gap: 10px; padding-bottom: 4px; }
+      .help-text { justify-content: center; }
+      .actions { width: 100%; }
+      .actions .button { flex: 1; }
+    }
+    @media (max-width: 420px) {
+      .selector-shell { padding-inline: 12px; }
+      .topbar-meta { gap: 2px; }
+      .rail-section { padding-top: 13px; }
+      .showcase { min-height: 390px; }
+      .showcase-inner { min-height: 390px; }
+      .hero-title { font-size: 31px; }
+      .robot-image { max-height: 265px; }
+      .selection-label { font-size: 9px; letter-spacing: .16em; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+  <style id="reference-stage-style">
+    /* Reference direction: cinematic black stage, centered hero, dimmed adjacent choices. */
+    :root {
+      --bg: #020304;
+      --surface: rgba(7, 12, 17, .72);
+      --line: rgba(179, 203, 219, .2);
+      --line-soft: rgba(189, 213, 229, .14);
+      --text: #f7fbff;
+      --muted: #a5b5c0;
+      --faint: #687883;
+      --accent: #8edaff;
+      --accent-strong: #55bdf3;
+    }
+
+    body { background: #020304; }
+    .selector-shell {
+      grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+      min-height: 100dvh;
+      padding: max(12px, env(safe-area-inset-top)) clamp(14px, 4vw, 56px) max(12px, env(safe-area-inset-bottom));
+      overflow: clip;
+      background:
+        radial-gradient(ellipse at 50% 50%, rgba(55, 99, 129, .16), transparent 38%),
+        radial-gradient(ellipse at 50% 72%, rgba(63, 130, 170, .1), transparent 34%),
+        linear-gradient(180deg, #030507 0%, #020304 62%, #05090c 100%);
+    }
+    .selector-shell::before { inset: 0; background: linear-gradient(90deg, rgba(255,255,255,.05), transparent 8%, transparent 92%, rgba(255,255,255,.05)); opacity: .35; }
+    .selector-shell::after { right: -10vw; bottom: -35vh; width: 62vw; height: 62vw; border-color: rgba(154, 204, 230, .09); box-shadow: 0 0 80px rgba(40, 122, 172, .1); }
+
+    .topbar { position: relative; justify-content: center; min-height: 74px; border-bottom: 0; }
+    .brand { flex-direction: column; gap: 5px; text-align: center; }
+    .brand-mark { width: 42px; height: 42px; border-color: rgba(220, 243, 255, .85); background: radial-gradient(circle at 40% 35%, #f9feff 0 12%, #a8e1ff 13% 21%, #123548 22% 100%); color: #06111a; box-shadow: 0 0 24px rgba(126, 214, 255, .65), 0 0 72px rgba(49, 145, 202, .25); font-size: 13px; }
+    .brand-copy strong { font-size: 17px; letter-spacing: .04em; text-transform: none; text-shadow: 0 0 16px rgba(218, 245, 255, .5); }
+    .brand-copy span { margin-top: 1px; color: #c8eafa; font-size: 10px; letter-spacing: .16em; text-transform: none; }
+    .topbar-meta { position: absolute; top: 12px; right: 0; gap: 12px; color: var(--faint); font-size: 10px; }
+    .topbar-meta .live::before { width: 5px; height: 5px; }
+    .topbar-meta a { opacity: .72; }
+
+    .maker-section { width: min(780px, 100%); margin-inline: auto; padding-top: 2px; }
+    .maker-section .rail-heading { display: none; }
+    .maker-rail { justify-content: flex-start; gap: 12px; padding: 2px 2px 8px; scroll-behavior: smooth; }
+    .maker-item { grid-template-columns: 1fr auto; grid-template-rows: auto auto; width: min(188px, 30vw); min-height: 62px; padding: 6px 10px; border-color: rgba(181, 207, 220, .14); background: rgba(7, 12, 16, .42); opacity: .28; filter: grayscale(1); transform: scale(.88); }
+    .maker-item:not(.is-active) { opacity: .28; filter: grayscale(1); }
+    .maker-item:hover { background: rgba(18, 31, 40, .7); }
+    .maker-item.is-active { border-color: rgba(139, 219, 255, .8); background: linear-gradient(180deg, rgba(81, 169, 211, .18), rgba(8, 15, 20, .72)); box-shadow: 0 0 18px rgba(77, 183, 232, .2), inset 0 0 18px rgba(120, 212, 255, .06); opacity: 1; filter: none; transform: scale(1.04); }
+    .maker-item .logo-box { width: 28px; height: 28px; border-radius: 50%; background: #eaf5f9; font-size: 11px; }
+    .maker-item.is-active .logo-box { box-shadow: 0 0 15px rgba(140, 224, 255, .55); }
+    .maker-title { font-size: 10px; color: #dcebf2; }
+    .maker-cn { color: #7f929e; font-size: 10px; }
+    .maker-item.is-active .maker-cn { color: #d5f4ff; }
+    .maker-item.is-active::after { right: 10px; bottom: 5px; width: 18px; height: 1px; }
+    .rail-index { font-size: 9px; }
+
+    .showcase { padding: 0; }
+    .showcase, .showcase-inner { min-width: 0; }
+    .showcase-inner { width: min(1240px, 100%); grid-template-rows: auto minmax(0, 1fr) auto; }
+    .hero-copy { z-index: 5; margin-top: 0; }
+    .selection-label { color: #b9eaff; font-size: 9px; letter-spacing: .28em; text-shadow: 0 0 14px rgba(106, 208, 255, .8); }
+    .selection-label::before, .selection-label::after { width: clamp(28px, 7vw, 94px); background: linear-gradient(90deg, transparent, #b8eaff); box-shadow: 0 0 8px rgba(117, 213, 255, .75); }
+    .hero-maker { color: #b8cbd5; font-size: 11px; }
+    .hero-title { margin-top: 2px; font-size: clamp(26px, 4vw, 49px); font-weight: 650; letter-spacing: .01em; text-shadow: 0 0 18px rgba(220, 246, 255, .4), 0 2px 30px rgba(41, 142, 194, .3); }
+    .hero-title small { color: var(--accent); font-size: .33em; letter-spacing: .16em; text-shadow: 0 0 14px rgba(98, 210, 255, .8); }
+
+    .robot-stage { height: clamp(270px, 47vh, 445px); margin: 0; overflow: visible; border: 0; }
+    .robot-stage::before { inset: 8% 34% 3%; border: 0; border-radius: 50%; transform: none; background: radial-gradient(ellipse at 50% 78%, rgba(175, 231, 255, .55) 0 2%, rgba(74, 174, 225, .22) 13%, rgba(31, 100, 144, .12) 34%, transparent 68%); filter: blur(8px); box-shadow: none; }
+    .robot-stage::after { inset: 0; background: linear-gradient(90deg, rgba(2, 3, 4, .94) 0%, transparent 19%, transparent 81%, rgba(2, 3, 4, .94) 100%), linear-gradient(180deg, rgba(2, 3, 4, .42), transparent 25%, transparent 76%, rgba(2, 3, 4, .72)); }
+    .stage-floor { position: absolute; z-index: 0; left: 50%; bottom: 3%; width: min(540px, 63vw); height: 22%; transform: translateX(-50%); border: 1px solid rgba(150, 222, 255, .7); border-radius: 50%; background: radial-gradient(ellipse, rgba(167, 233, 255, .55), rgba(55, 137, 176, .14) 40%, transparent 70%); box-shadow: 0 0 12px rgba(150, 229, 255, .8), 0 0 45px rgba(71, 173, 218, .34), inset 0 0 22px rgba(200, 245, 255, .55); filter: blur(.2px); }
+    .stage-floor::after { content: ""; position: absolute; inset: -9px 10%; border: 1px solid rgba(136, 213, 247, .22); border-radius: 50%; box-shadow: 0 0 30px rgba(78, 179, 226, .35); }
+    .robot-image { z-index: 2; width: min(570px, 52vw); height: 100%; max-width: none; object-fit: contain; object-position: center bottom; mix-blend-mode: normal; filter: grayscale(.18) saturate(.88) brightness(1.28) contrast(1.14) drop-shadow(0 20px 26px rgba(136, 222, 255, .3)); }
+    .robot-image.is-changing { opacity: .12; transform: scale(.97); }
+    .robot-fallback { z-index: 3; background: radial-gradient(ellipse, rgba(73, 153, 194, .18), transparent 64%); }
+    .robot-fallback strong { text-shadow: 0 0 16px rgba(123, 211, 255, .55); }
+
+    .side-robot { position: absolute; z-index: 1; bottom: 7%; width: clamp(120px, 15vw, 220px); height: 72%; overflow: hidden; opacity: .26; filter: grayscale(1) brightness(.52) contrast(1.2) blur(.25px); transition: opacity 250ms var(--ease), transform 320ms var(--ease), filter 250ms var(--ease); pointer-events: none; }
+    .side-robot::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(2,3,4,.12), rgba(2,3,4,.7) 88%, #020304); }
+    .side-robot img { width: 100%; height: 100%; object-fit: contain; object-position: center bottom; mix-blend-mode: normal; }
+    .side-robot span { position: absolute; z-index: 2; left: 0; right: 0; bottom: 5px; color: #afc9d6; font-size: 10px; text-align: center; }
+    .side-robot--left { left: 5%; transform: scale(.86) translateX(-10%); }
+    .side-robot--right { right: 5%; transform: scale(.86) translateX(10%); }
+    .side-robot.is-empty { opacity: .08; }
+    .stage-arrow { position: absolute; z-index: 6; top: 50%; display: grid; place-items: center; width: 52px; height: 64px; border: 0; border-radius: 4px; background: transparent; color: #eaf7ff; cursor: pointer; transform: translateY(-50%); filter: drop-shadow(0 0 9px rgba(160, 226, 255, .8)); transition: color 180ms var(--ease), transform 180ms var(--ease), opacity 180ms var(--ease); }
+    .stage-arrow:hover { color: var(--accent); transform: translateY(-50%) scale(1.08); }
+    .stage-arrow i { width: 42px; height: 42px; stroke-width: 1.2; }
+    .stage-arrow--left { left: 1%; }
+    .stage-arrow--right { right: 1%; }
+
+    .hero-meta { position: relative; z-index: 5; gap: 12px; margin-bottom: 0; color: #9db6c2; font-size: 10px; text-shadow: 0 0 10px rgba(115, 205, 255, .35); }
+    .hero-meta span + span::before { background: #72d4ff; box-shadow: 0 0 8px rgba(114, 212, 255, .8); }
+    .hero-meta strong { color: #eaf8ff; }
+
+    .model-section { width: min(760px, 100%); margin-inline: auto; padding-top: 1px; }
+    .model-section .rail-heading { display: none; }
+    .model-rail { gap: 8px; justify-content: center; padding: 4px 2px 8px; border-top: 1px solid rgba(161, 205, 222, .12); }
+    .model-item { width: min(215px, 28vw); min-height: 50px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 6px 10px; border-color: transparent; background: transparent; opacity: .32; filter: grayscale(.7); }
+    .model-item:hover { opacity: .72; background: rgba(26, 44, 55, .25); }
+    .model-item.is-active { opacity: 1; border-color: rgba(131, 218, 255, .7); background: linear-gradient(180deg, rgba(73, 147, 182, .15), transparent); box-shadow: 0 0 16px rgba(78, 186, 234, .14); filter: none; }
+    .model-item.is-active::after { right: 11px; bottom: 3px; width: 26px; }
+    .model-icon { width: 28px; height: 28px; border-color: rgba(178, 212, 226, .3); }
+    .model-item.is-active .model-icon { border-color: var(--accent); box-shadow: 0 0 12px rgba(110, 217, 255, .45); }
+    .model-title { font-size: 11px; }
+    .model-cn, .model-dof { font-size: 9px; }
+
+    .bottom-bar { min-height: 42px; padding-top: 4px; border-top: 0; }
+    .help-text { opacity: .7; font-size: 10px; }
+    .help-text kbd { min-width: 21px; border-color: rgba(176, 211, 224, .22); }
+    .button { min-height: 40px; border-color: rgba(165, 203, 219, .24); background: rgba(10, 17, 22, .74); color: #b5c9d3; }
+    .button.primary { border-color: #8ddcff; background: #86d9ff; color: #06131c; box-shadow: 0 0 19px rgba(102, 205, 255, .4); }
+    .toast { bottom: 65px; border-color: rgba(138, 222, 255, .65); background: rgba(4, 13, 18, .94); box-shadow: 0 0 25px rgba(56, 161, 207, .25); }
+
+    @media (max-width: 760px) {
+      .selector-shell { grid-template-rows: auto auto minmax(0, 1fr) auto auto; padding-inline: 12px; overflow-x: clip; overflow-y: clip; }
+      .topbar { min-height: 68px; }
+      .brand-mark { width: 36px; height: 36px; font-size: 11px; }
+      .brand-copy strong { font-size: 14px; }
+      .topbar-meta { top: 7px; right: 0; }
+      .maker-rail { justify-content: flex-start; }
+      .maker-item { width: 148px; min-height: 60px; }
+      .showcase { min-height: 430px; }
+      .showcase-inner { min-height: 430px; }
+      .hero-title { font-size: 31px; }
+      .robot-stage { height: 300px; }
+      .robot-image { width: 100%; max-width: 100%; }
+      .side-robot { display: none; }
+      .stage-arrow { width: 44px; height: 54px; }
+      .stage-arrow--left { left: -7px; }
+      .stage-arrow--right { right: -7px; }
+      .model-rail { justify-content: flex-start; }
+      .model-item { width: 210px; }
+      .bottom-bar { align-items: stretch; flex-direction: column; gap: 8px; padding-bottom: 0; }
+      .help-text { justify-content: center; }
+      .actions { width: 100%; }
+      .actions .button { flex: 1; }
+    }
+    @media (max-width: 420px) {
+      .hero-title { font-size: 28px; }
+      .hero-maker { font-size: 10px; }
+      .robot-stage { height: 280px; }
+      .robot-image { width: 100%; max-width: 100%; }
+      .stage-floor { width: 88vw; }
+      .selection-label { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="selector-shell">
+    <header class="topbar">
+      <a class="brand" href="index.html" aria-label="返回 Motion Lab 工作台"><span class="brand-mark" id="brandMark">U</span><span class="brand-copy"><strong id="brandName">Unitree Robotics</strong><span id="brandCn">宇树科技 · MOTION LAB</span></span></a>
+      <div class="topbar-meta"><span class="live">LOCAL ASSET PREVIEW</span><a href="index.html" aria-label="返回工作台"><i data-lucide="arrow-up-right" aria-hidden="true"></i><span>工作台</span></a></div>
+    </header>
+
+    <section class="rail-section maker-section" aria-labelledby="makerHeading">
+      <div class="rail-heading"><strong id="makerHeading">选择机器人厂家</strong><span>滚轮或左右方向键浏览</span></div>
+      <div class="rail maker-rail" id="makerRail" tabindex="0" role="listbox" aria-label="机器人厂家选择"></div>
+    </section>
+
+    <main class="showcase" aria-live="polite">
+      <div class="showcase-inner">
+        <div class="hero-copy"><div class="selection-label">CURRENT SELECTION</div><div class="hero-maker" id="heroMaker">Unitree Robotics · 宇树科技</div><h1 class="hero-title" id="heroTitle">G1 29 DoF <small>UNITREE</small></h1></div>
+        <div class="robot-stage" aria-label="当前机器人高光预览">
+          <button class="stage-arrow stage-arrow--left" id="stagePrev" type="button" aria-label="上一个机器人型号"><i data-lucide="chevron-left" aria-hidden="true"></i></button>
+          <div class="side-robot side-robot--left" aria-hidden="true"><img id="sideRobotLeft" alt="" /><span id="sideLabelLeft"></span></div>
+          <img class="robot-image" id="robotImage" src="assets/robots/g1_29dof_standing.png" alt="宇树科技 G1 29 DoF 机器人" width="480" height="1410" />
+          <div class="stage-floor" aria-hidden="true"></div>
+          <div class="side-robot side-robot--right" aria-hidden="true"><img id="sideRobotRight" alt="" /><span id="sideLabelRight"></span></div>
+          <button class="stage-arrow stage-arrow--right" id="stageNext" type="button" aria-label="下一个机器人型号"><i data-lucide="chevron-right" aria-hidden="true"></i></button>
+          <div class="robot-fallback" id="robotFallback" hidden><strong id="fallbackTitle">Robot preview</strong><span>该型号的图片资源待接入</span></div>
+        </div>
+        <div class="hero-meta"><span><strong id="metaDof">29 DoF</strong></span><span id="metaSource">MuJoCo · g1_mocap_29dof.xml</span><span id="metaStatus">本地资源已就绪</span></div>
+      </div>
+    </main>
+
+    <section class="model-section" aria-labelledby="modelHeading">
+      <div class="rail-heading"><strong id="modelHeading">选择机器人型号</strong><span id="modelCount">01 / 03</span></div>
+      <div class="rail model-rail" id="modelRail" tabindex="0" role="listbox" aria-label="机器人型号选择"></div>
+    </section>
+
+    <footer class="bottom-bar">
+      <div class="help-text"><i data-lucide="mouse" aria-hidden="true"></i><span>滚轮切换</span><kbd>←</kbd><kbd>→</kbd><span>键盘选择</span></div>
+      <div class="actions"><button class="button" id="resetSelection" type="button"><i data-lucide="rotate-ccw" aria-hidden="true"></i> 重置</button><button class="button primary" id="confirmSelection" type="button"><i data-lucide="arrow-right" aria-hidden="true"></i> 确认型号</button></div>
+    </footer>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script>
+    const manufacturers = [
+      {
+        id: "unitree", name: "Unitree Robotics", cn: "宇树科技", logo: "https://cdn.simpleicons.org/unitree/0c1115", mark: "U",
+        models: [
+          { id: "g1-29", name: "G1 29 DoF", cn: "人形机器人 · 直立站姿", dof: "29 DoF", image: "assets/robots/g1_29dof_standing.png", source: "MuJoCo · g1_mocap_29dof.xml", status: "透明立姿资源已就绪" },
+          { id: "g1-23", name: "G1 23 DoF", cn: "轻量动作版本 · 直立站姿", dof: "23 DoF", image: "assets/robots/g1_23dof_standing.png", source: "MuJoCo · scene_23dof.xml", status: "透明立姿资源已就绪" },
+          { id: "g1-hands", name: "G1 29 DoF · Hands", cn: "灵巧手版本 · 直立站姿", dof: "43 DoF", image: "assets/robots/g1_29dof_with_hand_standing.png", source: "GMR · unitree_g1_with_hands", status: "透明立姿资源已就绪" }
+        ]
+      },
+      {
+        id: "fourier", name: "Fourier Intelligence", cn: "傅利叶智能", logo: "https://cdn.simpleicons.org/fourier/0c1115", mark: "F",
+        models: [
+          { id: "gr1", name: "GR-1", cn: "通用人形机器人", dof: "全身 DoF", source: "待绑定 MJCF", status: "模型待接入" },
+          { id: "gr3", name: "GR-3", cn: "全尺寸人形机器人", dof: "全身 DoF", source: "待绑定 MJCF", status: "模型待接入" },
+          { id: "n1", name: "N1", cn: "灵巧操作平台", dof: "全身 DoF", source: "待绑定 MJCF", status: "模型待接入" }
+        ]
+      },
+      {
+        id: "booster", name: "Booster Robotics", cn: "Booster Robotics", logo: "https://cdn.simpleicons.org/booster/0c1115", mark: "B",
+        models: [
+          { id: "t1-29", name: "T1 29 DoF", cn: "人形机器人", dof: "29 DoF", source: "GMR · booster_t1_29dof", status: "模型待接入" },
+          { id: "t1", name: "T1", cn: "人形机器人", dof: "全身 DoF", source: "GMR · booster_t1", status: "模型待接入" },
+          { id: "k1", name: "K1", cn: "双足人形机器人", dof: "22 DoF", source: "GMR · booster_k1", status: "模型待接入" }
+        ]
+      }
+    ];
+
+    const state = { makerIndex: 0, modelIndex: 0 };
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const toast = document.querySelector("#toast");
+    let toastTimer;
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.hidden = true; }, 3000);
+    }
+
+    function logoMarkup(maker) {
+      return `<span class="logo-box"><img src="${maker.logo}" alt="${maker.name} logo" loading="lazy" onerror="this.hidden=true; this.nextElementSibling.classList.add('show')"><span class="logo-fallback">${maker.mark}</span></span>`;
+    }
+
+    function renderMakerRail() {
+      const rail = document.querySelector("#makerRail");
+      rail.innerHTML = manufacturers.map((maker, index) => `<button class="maker-item" type="button" role="option" data-index="${index}" aria-selected="false">${logoMarkup(maker)}<span class="maker-copy"><span class="maker-title">${maker.name}</span><span class="maker-cn">${maker.cn}</span></span><span class="rail-index">${String(index + 1).padStart(2, "0")}</span></button>`).join("");
+      rail.querySelectorAll(".maker-item").forEach((item) => item.addEventListener("click", () => setIndex("maker", Number(item.dataset.index))));
+      setIndex("maker", state.makerIndex, { announce: false, scroll: false });
+    }
+
+    function renderModelRail() {
+      const rail = document.querySelector("#modelRail");
+      const models = manufacturers[state.makerIndex].models;
+      rail.innerHTML = models.map((model, index) => `<button class="model-item" type="button" role="option" data-index="${index}" aria-selected="false"><span class="model-icon"><i data-lucide="bot" aria-hidden="true"></i></span><span class="model-copy"><span class="model-title">${model.name}</span><span class="model-cn">${model.cn}</span></span><span class="model-dof">${model.dof}</span></button>`).join("");
+      rail.querySelectorAll(".model-item").forEach((item) => item.addEventListener("click", () => setIndex("model", Number(item.dataset.index))));
+      window.lucide?.createIcons({ attrs: { "stroke-width": 1.6 } });
+      setIndex("model", state.modelIndex, { announce: false, scroll: false });
+    }
+
+    function syncRail(type, scroll = true) {
+      const selector = type === "maker" ? "#makerRail" : "#modelRail";
+      const index = type === "maker" ? state.makerIndex : state.modelIndex;
+      const rail = document.querySelector(selector);
+      rail.querySelectorAll("[role=option]").forEach((item, itemIndex) => {
+        const selected = itemIndex === index;
+        item.classList.toggle("is-active", selected);
+        item.setAttribute("aria-selected", String(selected));
+      });
+      const active = rail.querySelector(`[data-index="${index}"]`);
+      if (type === "maker" && active) {
+        const sideInset = Math.max(0, (rail.clientWidth - active.offsetWidth) / 2);
+        rail.style.paddingInline = `${sideInset}px`;
+        if (scroll) {
+          const railRect = rail.getBoundingClientRect();
+          const activeRect = active.getBoundingClientRect();
+          const delta = (activeRect.left + activeRect.width / 2) - (railRect.left + railRect.width / 2);
+          rail.scrollTo({ left: Math.max(0, rail.scrollLeft + delta), behavior: reduceMotion ? "auto" : "smooth" });
+        }
+      } else if (scroll && active && rail.scrollWidth > rail.clientWidth + 1) {
+        // Only scroll the horizontal model rail when it actually overflows.
+        // Calling scrollIntoView on a non-overflowing desktop rail can move the whole page.
+        const railRect = rail.getBoundingClientRect();
+        const activeRect = active.getBoundingClientRect();
+        const delta = (activeRect.left + activeRect.width / 2) - (railRect.left + railRect.width / 2);
+        rail.scrollTo({ left: Math.max(0, rail.scrollLeft + delta), behavior: reduceMotion ? "auto" : "smooth" });
+      }
+    }
+
+    function setIndex(type, nextIndex, options = {}) {
+      const list = type === "maker" ? manufacturers : manufacturers[state.makerIndex].models;
+      const key = type === "maker" ? "makerIndex" : "modelIndex";
+      state[key] = (nextIndex + list.length) % list.length;
+      if (type === "maker") {
+        state.modelIndex = 0;
+        renderModelRail();
+      }
+      syncRail(type, options.scroll !== false);
+      updatePreview();
+      if (options.announce !== false) {
+        const maker = manufacturers[state.makerIndex];
+        const model = maker.models[state.modelIndex];
+        showToast(`${maker.cn} · ${model.name}`);
+      }
+    }
+
+    function updatePreview() {
+      const maker = manufacturers[state.makerIndex];
+      const model = maker.models[state.modelIndex];
+      document.querySelector("#heroMaker").textContent = `${maker.name} · ${maker.cn}`;
+      document.querySelector("#heroTitle").innerHTML = `${model.name} <small>${maker.id.toUpperCase()}</small>`;
+      document.querySelector("#metaDof").textContent = model.dof;
+      document.querySelector("#metaSource").textContent = model.source;
+      document.querySelector("#metaStatus").textContent = model.status;
+      document.querySelector("#modelCount").textContent = `${String(state.modelIndex + 1).padStart(2, "0")} / ${String(maker.models.length).padStart(2, "0")}`;
+      document.querySelector("#brandMark").textContent = maker.mark;
+      document.querySelector("#brandName").textContent = maker.name;
+      document.querySelector("#brandCn").textContent = `${maker.cn} · MOTION LAB`;
+      const leftModel = maker.models[(state.modelIndex - 1 + maker.models.length) % maker.models.length];
+      const rightModel = maker.models[(state.modelIndex + 1) % maker.models.length];
+      [["#sideRobotLeft", "#sideLabelLeft", leftModel], ["#sideRobotRight", "#sideLabelRight", rightModel]].forEach(([imageSelector, labelSelector, sideModel]) => {
+        const sideImage = document.querySelector(imageSelector);
+        const sideCard = sideImage.closest(".side-robot");
+        document.querySelector(labelSelector).textContent = sideModel.name;
+        sideCard.classList.toggle("is-empty", !sideModel.image);
+        sideImage.hidden = !sideModel.image;
+        if (sideModel.image) sideImage.src = sideModel.image;
+      });
+      const image = document.querySelector("#robotImage");
+      const fallback = document.querySelector("#robotFallback");
+      image.alt = `${maker.cn} ${model.name} 机器人预览`;
+      image.classList.add("is-changing");
+      image.onerror = () => { image.hidden = true; fallback.hidden = false; };
+      image.onload = () => { image.hidden = false; fallback.hidden = true; image.classList.remove("is-changing"); };
+      if (model.image) { fallback.hidden = true; image.hidden = false; image.src = model.image; }
+      else { image.hidden = true; fallback.hidden = false; image.classList.remove("is-changing"); document.querySelector("#fallbackTitle").textContent = model.name; }
+    }
+
+    function attachRailControls(type, selector) {
+      const rail = document.querySelector(selector);
+      let locked = false;
+      rail.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        if (locked) return;
+        locked = true;
+        const current = type === "maker" ? state.makerIndex : state.modelIndex;
+        setIndex(type, current + (event.deltaY > 0 || event.deltaX > 0 ? 1 : -1));
+        setTimeout(() => { locked = false; }, reduceMotion ? 0 : 150);
+      }, { passive: false });
+      rail.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const list = type === "maker" ? manufacturers : manufacturers[state.makerIndex].models;
+        const current = type === "maker" ? state.makerIndex : state.modelIndex;
+        const next = event.key === "Home" ? 0 : event.key === "End" ? list.length - 1 : current + (event.key === "ArrowRight" ? 1 : -1);
+        setIndex(type, next);
+      });
+    }
+
+    renderMakerRail();
+    renderModelRail();
+    attachRailControls("maker", "#makerRail");
+    attachRailControls("model", "#modelRail");
+    setIndex("maker", 0, { announce: false, scroll: true });
+    document.addEventListener("keydown", (event) => {
+      if (event.target.closest("button, a, [role=listbox]")) return;
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        setIndex("model", state.modelIndex + (event.key === "ArrowRight" ? 1 : -1));
+      }
+    });
+    document.querySelector("#resetSelection").addEventListener("click", () => { setIndex("maker", 0, { announce: false }); showToast("已恢复默认选择：宇树科技 · G1 29 DoF"); });
+    document.querySelector("#confirmSelection").addEventListener("click", () => {
+      const maker = manufacturers[state.makerIndex];
+      const model = maker.models[state.modelIndex];
+      localStorage.setItem("motionLabRobotSelection", JSON.stringify({ maker: maker.id, model: model.id, updatedAt: new Date().toISOString() }));
+      showToast(`${maker.cn} · ${model.name} 已保存`);
+    });
+    document.querySelector("#stagePrev").addEventListener("click", () => setIndex("model", state.modelIndex - 1));
+    document.querySelector("#stageNext").addEventListener("click", () => setIndex("model", state.modelIndex + 1));
+    window.lucide?.createIcons({ attrs: { "stroke-width": 1.6 } });
+    updatePreview();
+  </script>
+</body>
+</html>
