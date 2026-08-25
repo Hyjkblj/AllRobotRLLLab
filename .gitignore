@@ -8,6 +8,7 @@ frontend-prototype/.runtime/
 .runtime/
 .env
 .env.*
+!.env.staging.example
 
 # Third-party repositories, simulator SDKs, meshes, checkpoints and model
 # weights are installed outside this repository. See README.md for pinned

@@ -24,6 +24,12 @@ P3 训练、TorchScript/ONNX 导出、三种子 sim2sim、策略包校验和产�
 
 阶段 A–F 的完成度和剩余生产缺口见 [docs/阶段完成度.md](docs/阶段完成度.md)。
 
+## CI/CD 与部署
+
+仓库的 PR 质量门见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)，包含 Python/数据库测试、仓库边界检查、Compose 校验和 React 构建。平台服务镜像由 [`infra/docker/platform.Dockerfile`](infra/docker/platform.Dockerfile) 构建；staging 编排见 [`infra/compose/docker-compose.staging.yml`](infra/compose/docker-compose.staging.yml)。
+
+标准部署、服务器初始化、GPU Worker、发布和回滚流程见 [docs/部署与CI-CD.md](docs/部署与CI-CD.md)。CI 不下载或提交第三方仓库；真实 Isaac/GMR/GVHMR/Unitree 运行时必须在 GPU 服务器按本 README 的版本锁定清单安装。
+
 ## 第三方依赖
 
 第三方依赖不属于本仓库提交范围。以下路径相对于仓库根目录；如果只运行 API contract/smoke tests，至少安装 GMR 的 G1 资产。真实动作恢复、Isaac 训练和 Unitree sim2sim 需要对应的 Linux/GPU 环境。

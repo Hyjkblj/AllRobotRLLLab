@@ -1,0 +1,34 @@
+name: GPU and simulation acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Existing run identifier to evaluate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    name: Isaac/MuJoCo acceptance gate
+    runs-on: [self-hosted, linux, gpu]
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify external runtime pins
+        env:
+          ISAACLAB_PATH: ${{ vars.ISAACLAB_PATH }}
+          ISAACSIM_PATH: ${{ vars.ISAACSIM_PATH }}
+          GMR_PATH: ${{ vars.GMR_PATH }}
+          GVHMR_PATH: ${{ vars.GVHMR_PATH }}
+          UNITREE_MUJOCO_PATH: ${{ vars.UNITREE_MUJOCO_PATH }}
+        run: python scripts/check_external_runtime.py
+      - name: Run GPU acceptance harness
+        env:
+          ALLROBOTRL_RUN_ID: ${{ inputs.run_id }}
+          DATABASE_URL: ${{ secrets.GPU_DATABASE_URL }}
+          REDIS_URL: ${{ secrets.GPU_REDIS_URL }}
+        run: python scripts/run_gpu_acceptance.py
