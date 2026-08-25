@@ -13,7 +13,7 @@ from backend.app.application.policy_exporter import ExportError, ExportResult, T
 from backend.app.application.run_service import RunService, utc_now
 from backend.app.application.sim2sim_service import FakeSim2SimAdapter, build_sim2sim_report
 from backend.app.application.training_validator import validate_training_config
-from backend.app.domain.contracts import Actor, ArtifactRecord, CheckpointRecord, MetricPoint, PolicyBundle, Sim2SimReport, Sim2SimThresholds, TrainingConfig
+from backend.app.domain.contracts import Actor, ArtifactRecord, CheckpointRecord, MetricPoint, P3RunState, PolicyBundle, Sim2SimReport, Sim2SimThresholds, TrainingConfig
 from backend.app.domain.state_machine import RunStatus
 
 
@@ -69,6 +69,8 @@ class TrainingService:
             raise TrainingServiceError("TRAIN_STATUS_INVALID", f"run must be CREATED, TRAINING_PREPARING or TRAINING, got {run.status}", status_code=409)
         run, attempts = self.run_service.get_run(run_id=run_id, actor=effective_actor)
         attempt = next(attempt for attempt in attempts if attempt.attempt_id == run.current_attempt_id)
+        state = self._load_state(run_id)
+        self._persist_state(state.model_copy(update={"attempt_id": attempt.attempt_id, "training_config": config, "updated_at": utc_now()}))
         return run, attempt
 
     def train_smoke(self, *, run_id: str, config: TrainingConfig, worker_id: str = "local-smoke-worker") -> TrainingResult:
@@ -89,7 +91,9 @@ class TrainingService:
         checkpoint_artifact = self._register_file_artifact(run_id=run_id, attempt_id=attempt.attempt_id, kind="checkpoint", path=checkpoint_path, content_type="application/json")
         if checkpoint_artifact is not None:
             artifacts.append(checkpoint_artifact)
+        state = self._load_state(run_id)
         self.artifact_ids[run_id] = [artifact.artifact_id for artifact in artifacts]
+        self._persist_state(state.model_copy(update={"attempt_id": attempt.attempt_id, "training_config": config, "checkpoint": checkpoint, "artifact_ids": list(self.artifact_ids[run_id]), "updated_at": utc_now()}))
         metrics = [MetricPoint(attempt_id=attempt.attempt_id, step=step, name=name, value=value, timestamp=utc_now()) for step, (name, value) in enumerate((("train/return", 0.0), ("train/return", 1.0), ("train/fall_rate", 0.0), ("train/joint_rmse_rad", 0.1), ("resource/gpu_memory_gb", float(config.resources.gpu_memory_gb))))]
         for metric in metrics:
             self.run_service.append_event(run_id=run_id, event_type="metric", stage="training", message=metric.name, payload=metric.model_dump(mode="json"))
@@ -100,8 +104,9 @@ class TrainingService:
         run, _attempts = self.run_service.get_run(run_id=run_id, actor=Actor(user_id=self._creator(run_id)))
         if run.status != RunStatus.TRAINING_SUCCEEDED:
             raise TrainingServiceError("EXPORT_STATUS_INVALID", f"run must be TRAINING_SUCCEEDED, got {run.status}", status_code=409)
-        config = self.configs.get(run_id)
-        checkpoint = self.checkpoints.get(run_id)
+        state = self._load_state(run_id)
+        config = state.training_config or self.configs.get(run_id)
+        checkpoint = state.checkpoint or self.checkpoints.get(run_id)
         if config is None or checkpoint is None:
             raise TrainingServiceError("CHECKPOINT_NOT_FOUND", "training checkpoint and config are required before export", status_code=409)
         self.run_service.transition_run(run_id=run_id, target=RunStatus.EXPORTING, stage="export", message="Export started")
@@ -125,6 +130,7 @@ class TrainingService:
             self.artifact_ids.setdefault(run_id, []).append(bundle_artifact.artifact_id)
         bundle = bundle.model_copy(update={"artifact_ids": list(self.artifact_ids.get(run_id, []))})
         self.bundles[run_id] = bundle
+        self._persist_state(state.model_copy(update={"attempt_id": checkpoint.attempt_id, "training_config": config, "checkpoint": checkpoint, "export_metadata": exported.metadata, "export_files": exported.files, "bundle": bundle, "artifact_ids": list(self.artifact_ids.get(run_id, [])), "updated_at": utc_now()}))
         self.run_service.transition_run(run_id=run_id, target=RunStatus.EXPORTED, stage="export", message="JIT and ONNX export completed")
         return bundle
 
@@ -136,13 +142,26 @@ class TrainingService:
             raise TrainingServiceError("SIM2SIM_SEED_INVALID", "exactly three distinct seeds are required")
         self.run_service.transition_run(run_id=run_id, target=RunStatus.SIM2SIM_QUEUED, stage="sim2sim", message="Three-seed sim2sim queued")
         self.run_service.transition_run(run_id=run_id, target=RunStatus.SIM2SIM_RUNNING, stage="sim2sim", message="Three-seed sim2sim started")
+        state = self._load_state(run_id)
+        config = state.training_config or self.configs.get(run_id)
+        checkpoint = state.checkpoint or self.checkpoints.get(run_id)
+        if config is None or checkpoint is None:
+            raise TrainingServiceError("CHECKPOINT_NOT_FOUND", "durable training state is required before sim2sim", status_code=409)
+        if state.export_metadata is not None:
+            self.configs[run_id] = config
+            self.checkpoints[run_id] = checkpoint
+            self.export_results[run_id] = ExportResult(metadata=state.export_metadata, files=state.export_files, output_dir=Path(checkpoint.uri).parent / "export")
+            if state.bundle is not None:
+                self.bundles[run_id] = state.bundle
+                self.bundle_dirs[run_id] = Path(checkpoint.uri).parent / "export" / "bundle"
+            self.artifact_ids[run_id] = list(state.artifact_ids)
         evaluator = adapter or FakeSim2SimAdapter()
         evaluations = [evaluator.evaluate(seed=seed) for seed in seeds]
         report = build_sim2sim_report(run_id=run_id, adapter=evaluator.name, backend=evaluator.backend, evaluations=evaluations, thresholds=thresholds)
         self.reports[run_id] = report
         report_artifact = None
         final_bundle_artifact = None
-        bundle_dir = self.bundle_dirs.get(run_id)
+        bundle_dir = self.bundle_dirs.get(run_id) or (Path(checkpoint.uri).parent / "export" / "bundle")
         exported = self.export_results.get(run_id)
         if bundle_dir is not None and exported is not None:
             # Rebuild the archive so the downloadable package contains the
@@ -163,7 +182,16 @@ class TrainingService:
             self.run_service.transition_run(run_id=run_id, target=RunStatus.READY_TO_DOWNLOAD, stage="release", message="Run is ready to download")
         else:
             self.run_service.transition_run(run_id=run_id, target=RunStatus.FAILED, stage="sim2sim", message="Three-seed sim2sim failed")
+        self._persist_state(state.model_copy(update={"attempt_id": run.current_attempt_id, "training_config": config, "checkpoint": checkpoint, "export_metadata": exported.metadata if exported else state.export_metadata, "export_files": exported.files if exported else state.export_files, "bundle": self.bundles.get(run_id, state.bundle), "sim2sim_report": report, "artifact_ids": list(self.artifact_ids.get(run_id, state.artifact_ids)), "updated_at": utc_now()}))
         return report
+
+    def get_sim2sim_report(self, run_id: str) -> Sim2SimReport | None:
+        """Read the report from durable state after an API process restart."""
+        report = self.reports.get(run_id)
+        if report is not None:
+            return report
+        state = self._load_state(run_id)
+        return state.sim2sim_report
 
     def _register_file_artifact(self, *, run_id: str, attempt_id: str, kind: str, path: Path, content_type: str) -> ArtifactRecord | None:
         """Publish a worker output through the object-store/application port."""
@@ -197,6 +225,30 @@ class TrainingService:
             if run is None:
                 raise TrainingServiceError("RUN_NOT_FOUND", f"run not found: {run_id}", status_code=404)
             return run.created_by
+
+    def _load_state(self, run_id: str) -> P3RunState:
+        with self.run_service.uow:
+            state = self.run_service.uow.p3_states.get(run_id)
+        if state is not None:
+            if state.training_config is not None:
+                self.configs[run_id] = state.training_config
+            if state.checkpoint is not None:
+                self.checkpoints[run_id] = state.checkpoint
+            if state.bundle is not None:
+                self.bundles[run_id] = state.bundle
+            if state.sim2sim_report is not None:
+                self.reports[run_id] = state.sim2sim_report
+            self.artifact_ids[run_id] = list(state.artifact_ids)
+            return state
+        with self.run_service.uow:
+            run = self.run_service.uow.runs.get(run_id)
+        if run is None:
+            raise TrainingServiceError("RUN_NOT_FOUND", f"run not found: {run_id}", status_code=404)
+        return P3RunState(run_id=run_id, attempt_id=run.current_attempt_id, updated_at=utc_now())
+
+    def _persist_state(self, state: P3RunState) -> P3RunState:
+        with self.run_service.uow:
+            return self.run_service.uow.p3_states.upsert(state)
 
 
 __all__ = ["TrainingResult", "TrainingService", "TrainingServiceError"]

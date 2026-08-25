@@ -23,6 +23,7 @@ from .contracts import (
     AttemptRecord,
     AuditEvent,
     OutboxEvent,
+    P3RunState,
     ProjectMember,
     ProjectRecord,
     ProjectRole,
@@ -91,6 +92,14 @@ class ArtifactRepository(Protocol):
 
     def get(self, artifact_id: str) -> ArtifactRecord | None: ...
 
+    def list_for_run(self, run_id: str) -> list[ArtifactRecord]: ...
+
+
+class P3StateRepository(Protocol):
+    def get(self, run_id: str) -> P3RunState | None: ...
+
+    def upsert(self, state: P3RunState) -> P3RunState: ...
+
 
 class RunRepository(Protocol):
     def create(self, run: RunRecord, attempt: AttemptRecord, *, idempotency_key: str | None = None) -> RunRecord: ...
@@ -144,6 +153,7 @@ class UnitOfWork(Protocol):
     outbox: OutboxRepository
     assets: AssetRepository
     artifacts: ArtifactRepository
+    p3_states: P3StateRepository
 
     def __enter__(self) -> "UnitOfWork": ...
 
@@ -162,4 +172,4 @@ class TaskDispatcher(Protocol):
     def enqueue(self, *, queue: str, task: str, payload: dict, idempotency_key: str) -> str: ...
 
 
-__all__ = ["ArtifactRepository", "AssetRepository", "AuditRepository", "EventRepository", "MotionSourceAdapter", "ObjectStore", "OutboxRepository", "ProjectRepository", "RobotAdapter", "RunRepository", "Sim2SimAdapter", "TaskDispatcher", "TrainingBackendAdapter", "UnitOfWork"]
+__all__ = ["ArtifactRepository", "AssetRepository", "AuditRepository", "EventRepository", "MotionSourceAdapter", "ObjectStore", "OutboxRepository", "P3StateRepository", "ProjectRepository", "RobotAdapter", "RunRepository", "Sim2SimAdapter", "TaskDispatcher", "TrainingBackendAdapter", "UnitOfWork"]

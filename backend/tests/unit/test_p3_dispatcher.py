@@ -8,6 +8,7 @@ from backend.app.domain.contracts import Actor, TrainingConfig
 from backend.app.infrastructure.memory import InMemoryUnitOfWork
 from backend.app.infrastructure.queue import InMemoryTaskDispatcher
 from backend.app.workers.p3_tasks import P3TaskExecutor
+from backend.app.domain.state_machine import RunStatus
 
 
 def test_p3_async_submission_is_idempotent_and_worker_can_execute(tmp_path: Path) -> None:
@@ -33,3 +34,22 @@ def test_p3_async_submission_is_idempotent_and_worker_can_execute(tmp_path: Path
     assert result["status"] == "SUCCEEDED"
     final, _ = run_service.get_run(run_id=run.run_id, actor=actor)
     assert final.status == "TRAINING_SUCCEEDED"
+
+
+def test_worker_replay_is_idempotent_after_completed_train(tmp_path: Path) -> None:
+    uow = InMemoryUnitOfWork()
+    run_service = RunService(uow)
+    actor = Actor(user_id="alice")
+    project = run_service.create_project(name="P3 replay", actor=actor)
+    run, _, _ = run_service.create_run(actor=actor, project_id=project.project_id, robot={"robot_id": "unitree_g1_29dof"}, motion={"train_motion_sha256": "a" * 64}, reward_config_sha256="b" * 64, training_config_sha256="c" * 64)
+    adapter = UnitreeG1Adapter(repository_root=Path(__file__).resolve().parents[3])
+    config = TrainingConfig(motion_asset_version_id="motion-1")
+    first_service = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=tmp_path / "workspace")
+    first = P3TaskExecutor(first_service).execute({"operation": "train", "run_id": run.run_id, "config": config.model_dump(mode="json")})
+    second_service = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=tmp_path / "workspace")
+    replay = P3TaskExecutor(second_service).execute({"operation": "train", "run_id": run.run_id, "config": config.model_dump(mode="json")})
+
+    assert first["checkpoint_id"] == replay["checkpoint_id"]
+    assert replay["replayed"] is True
+    loaded, _ = run_service.get_run(run_id=run.run_id, actor=actor)
+    assert loaded.status == RunStatus.TRAINING_SUCCEEDED

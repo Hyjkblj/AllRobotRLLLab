@@ -70,3 +70,29 @@ def test_p3_outputs_are_checksum_verified_and_registered(tmp_path: Path) -> None
     assert bundle.sim2sim_report is not None
     assert bundle.sim2sim_report.report_sha256 == report.report_sha256
     assert set(bundle.artifact_ids) == {artifact.artifact_id for artifact in artifacts}
+
+
+def test_p3_state_survives_training_service_recreation(tmp_path: Path) -> None:
+    uow = InMemoryUnitOfWork()
+    run_service = RunService(uow)
+    actor = Actor(user_id="durable-owner")
+    project = run_service.create_project(name="P3 durable", actor=actor)
+    run, _, _ = run_service.create_run(actor=actor, project_id=project.project_id, robot={"robot_id": "unitree_g1_29dof"}, motion={"train_motion_sha256": "a" * 64}, reward_config_sha256="b" * 64, training_config_sha256="c" * 64)
+    object_store = LocalObjectStore(tmp_path / "objects")
+    artifact_service = ArtifactService(uow, object_store)
+    adapter = UnitreeG1Adapter(repository_root=Path(__file__).resolve().parents[3])
+    first = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=tmp_path / "workspace", artifact_service=artifact_service, object_store=object_store)
+    config = TrainingConfig(motion_asset_version_id="motion-1")
+    first.train_smoke(run_id=run.run_id, config=config)
+
+    # A new service instance represents a fresh Celery worker process. It has
+    # no in-memory config/checkpoint/export dictionaries to fall back on.
+    second = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=tmp_path / "workspace", artifact_service=artifact_service, object_store=object_store)
+    second.export(run_id=run.run_id, exporter=StubExporter())
+    third = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=tmp_path / "workspace", artifact_service=artifact_service, object_store=object_store)
+    report = third.sim2sim(run_id=run.run_id)
+
+    assert report.status == "PASSED"
+    assert third.bundles[run.run_id].status == "READY_TO_DOWNLOAD"
+    assert third.bundles[run.run_id].sim2sim_report is not None
+    assert {artifact.kind for artifact in artifact_service.list_for_run(run_id=run.run_id, actor=actor)} == {"checkpoint", "policy_bundle", "sim2sim_report", "policy_bundle_final"}

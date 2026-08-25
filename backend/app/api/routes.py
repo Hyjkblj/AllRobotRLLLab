@@ -654,7 +654,7 @@ def get_sim2sim_report(run_id: str, request: Request) -> dict:
         run, _ = run_service.get_run(run_id=run_id, actor=_actor(request))
     except RunServiceError as exc:
         raise _service_error(request, exc) from exc
-    report = training_service.reports.get(run_id)
+    report = training_service.get_sim2sim_report(run_id)
     if report is None:
         raise _error(request, "SIM2SIM_REPORT_NOT_FOUND", f"sim2sim report not found for run: {run_id}", status_code=404)
     return {"request_id": _request_id(request), "item": report.model_dump(mode="json"), "resource_version": report.report_sha256}

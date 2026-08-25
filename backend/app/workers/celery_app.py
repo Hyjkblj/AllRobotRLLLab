@@ -26,6 +26,13 @@ def create_celery_app():
     from celery import Celery
 
     celery = Celery("allrobotrl-platform", broker=settings.redis_url, backend=settings.redis_url)
+    celery.conf.update(
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
+        task_track_started=True,
+        worker_prefetch_multiplier=1,
+        result_expires=86400,
+    )
     uow = PostgresUnitOfWork(settings.database_url)
     run_service = RunService(uow)
     object_store = build_object_store(settings)

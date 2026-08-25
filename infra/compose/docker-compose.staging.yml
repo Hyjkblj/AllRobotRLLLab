@@ -83,6 +83,8 @@ services:
       MINIO_SECURE: "false"
     ports:
       - "${API_PORT:-8000}:8000"
+    volumes:
+      - staging-runtime:/app/.runtime
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
       interval: 10s
@@ -108,9 +110,12 @@ services:
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-allrobotrl}
       MINIO_SECURE: "false"
+    volumes:
+      - staging-runtime:/app/.runtime
     command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "isaac-gpu,sim2sim-gpu"]
 
 volumes:
   staging-postgres:
   staging-redis:
   staging-minio:
+  staging-runtime:

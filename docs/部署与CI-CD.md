@@ -54,7 +54,9 @@ curl --fail http://127.0.0.1:8000/api/v1/health
 curl --fail http://127.0.0.1:8000/api/v1/health/infrastructure
 ```
 
-首次部署时，PostgreSQL 容器会从 `infra/migrations` 执行初始化迁移。后续迁移必须使用向后兼容的版本化脚本，并在 staging 先验证；不要删除持久化卷来“解决”迁移问题。
+首次部署时，PostgreSQL 容器会从 `infra/migrations` 执行初始化迁移，其中 `004_p3_run_state.sql` 持久化训练配置、checkpoint、导出元数据、策略包和 sim2sim 报告。API 与 worker 共享 `staging-runtime` 卷，保证同一 Run 的中间文件可被后续阶段恢复；最终产物仍必须写入 MinIO。后续迁移必须使用向后兼容的版本化脚本，并在 staging 先验证；不要删除持久化卷来“解决”迁移问题。
+
+验证 worker 重启恢复：提交一个 async train 后重启 worker，任务重新投递或重试时应保持相同 checkpoint id；随后从新的 worker 进程提交 export/sim2sim，不能依赖旧 API 进程内存。对应的本地契约测试是 `test_p3_state_survives_training_service_recreation` 和 `test_worker_replay_is_idempotent_after_completed_train`。
 
 ## 4. 生产 GPU Worker
 
@@ -70,7 +72,7 @@ celery -A backend.app.workers.celery_app:celery_app worker \
   --loglevel=INFO -Q isaac-gpu,sim2sim-gpu --concurrency=1
 ```
 
-当前仓库的 Celery task 已建立稳定任务名和幂等键，但真实 Isaac/RSL-RL runner、Unitree MuJoCo adapter 和 GPU lease 仍需在服务器阶段接入。没有 GPU 运行证据时，不能把 Run 标记为 `READY_TO_DOWNLOAD`。
+当前仓库的 Celery task 已建立稳定任务名、幂等键、late acknowledgement、worker lost 重投和 durable P3 state；真实 Isaac/RSL-RL runner、Unitree MuJoCo adapter 和 GPU lease 仍需在服务器阶段接入。没有 GPU 运行证据时，不能把 Run 标记为 `READY_TO_DOWNLOAD`。
 
 ## 5. 发布和回滚
 

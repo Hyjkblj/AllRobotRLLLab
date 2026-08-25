@@ -697,13 +697,29 @@ class RunManifest(ContractModel):
         return self.model_copy(update={"manifest_sha256": digest})
 
 
+class P3RunState(ContractModel):
+    """Durable state needed to resume P3 work in another process."""
+
+    run_id: str = Field(min_length=1)
+    attempt_id: str = Field(min_length=1)
+    training_config: TrainingConfig | None = None
+    checkpoint: CheckpointRecord | None = None
+    export_metadata: ExportMetadata | None = None
+    export_files: list[ExportFile] = Field(default_factory=list)
+    bundle: PolicyBundle | None = None
+    sim2sim_report: Sim2SimReport | None = None
+    artifact_ids: list[str] = Field(default_factory=list)
+    updated_at: str = Field(min_length=1)
+
+
 RunRecord.model_rebuild()
+P3RunState.model_rebuild()
 
 
 __all__ = [
     "Actor", "ActuationSpec", "ActionConfig", "ArrayField", "ArtifactRecord", "AssetKind", "AssetRecord", "AssetStatus", "AssetVersion", "AssetVersionStatus", "AttemptRecord", "AuditEvent", "CheckpointRecord", "ControlConfig", "DomainRandomization", "ExportFile", "ExportMetadata",
     "GlobalTransform", "JointOffset", "JointSpec", "LicenseInfo", "MotionArrayMeta",
-    "MetricPoint", "MotionEditConfig", "MotionEditVersion", "MotionQuality", "MotionQualityReport", "OutboxEvent", "PPOConfig", "PolicyBundle", "ProjectMember", "ProjectRecord", "ProjectRole", "ProjectStatus", "ResourceRequest", "RetargetMotion", "TaskSubmission",
+    "MetricPoint", "MotionEditConfig", "MotionEditVersion", "MotionQuality", "MotionQualityReport", "OutboxEvent", "P3RunState", "PPOConfig", "PolicyBundle", "ProjectMember", "ProjectRecord", "ProjectRole", "ProjectStatus", "ResourceRequest", "RetargetMotion", "TaskSubmission",
     "RewardConfig", "RewardConfigVersion", "RewardTerm", "RewardTermSpec", "RobotSpec", "RunEvent", "RunManifest", "RunRecord", "RunStatus", "RuntimeVersions", "SeedEvaluation", "Sim2SimReport", "Sim2SimThresholds", "UploadSession",
     "SchemaVersion", "SourceMotionDescriptor", "TrainMotionNPZ", "TrainingConfig", "ValidationIssue",
     "ValidationResult", "ValidationSeverity",

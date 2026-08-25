@@ -22,6 +22,7 @@ from backend.app.domain.contracts import (
     AuditEvent,
     AttemptRecord,
     OutboxEvent,
+    P3RunState,
     ProjectMember,
     ProjectRecord,
     RunEvent,
@@ -335,6 +336,52 @@ class PostgresArtifactRepository(_Repository):
             return [_artifact(row) for row in cursor.fetchall()]
 
 
+class PostgresP3StateRepository(_Repository):
+    def get(self, run_id: str) -> P3RunState | None:
+        with self.connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute("select * from p3_run_states where run_id=%s", (_uuid(run_id),))
+            row = cursor.fetchone()
+        return _p3_state(row) if row else None
+
+    def upsert(self, state: P3RunState) -> P3RunState:
+        values = (
+            _uuid(state.run_id),
+            _uuid(state.attempt_id),
+            Jsonb(state.training_config.model_dump(mode="json")) if state.training_config else None,
+            Jsonb(state.checkpoint.model_dump(mode="json")) if state.checkpoint else None,
+            Jsonb(state.export_metadata.model_dump(mode="json")) if state.export_metadata else None,
+            Jsonb([item.model_dump(mode="json") for item in state.export_files]),
+            Jsonb(state.bundle.model_dump(mode="json")) if state.bundle else None,
+            Jsonb(state.sim2sim_report.model_dump(mode="json")) if state.sim2sim_report else None,
+            Jsonb(state.artifact_ids),
+            state.updated_at,
+        )
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into p3_run_states
+                  (run_id, attempt_id, training_config_json, checkpoint_json,
+                   export_metadata_json, export_files_json, bundle_json,
+                   sim2sim_report_json, artifact_ids_json, updated_at)
+                values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                on conflict (run_id) do update set
+                  attempt_id=excluded.attempt_id,
+                  training_config_json=excluded.training_config_json,
+                  checkpoint_json=excluded.checkpoint_json,
+                  export_metadata_json=excluded.export_metadata_json,
+                  export_files_json=excluded.export_files_json,
+                  bundle_json=excluded.bundle_json,
+                  sim2sim_report_json=excluded.sim2sim_report_json,
+                  artifact_ids_json=excluded.artifact_ids_json,
+                  updated_at=excluded.updated_at
+                returning *
+                """,
+                values,
+            )
+            row = cursor.fetchone()
+        return _p3_state(row)
+
+
 class PostgresUnitOfWork:
     """One connection/transaction per application service operation."""
 
@@ -353,6 +400,7 @@ class PostgresUnitOfWork:
         self.outbox = PostgresOutboxRepository(self.connection)
         self.assets = PostgresAssetRepository(self.connection)
         self.artifacts = PostgresArtifactRepository(self.connection)
+        self.p3_states = PostgresP3StateRepository(self.connection)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -418,6 +466,23 @@ def _asset_version(row: dict[str, Any]) -> AssetVersion:
 
 def _artifact(row: dict[str, Any]) -> ArtifactRecord:
     return ArtifactRecord(artifact_id=str(row["id"]), run_id=str(row["run_id"]), attempt_id=str(row["attempt_id"]), kind=row["kind"], object_key=row["object_key"], sha256=row["sha256"], size_bytes=row["size_bytes"], content_type=row["content_type"], created_at=_iso(row["created_at"]))
+
+
+def _p3_state(row: dict[str, Any]) -> P3RunState:
+    from backend.app.domain.contracts import CheckpointRecord, ExportFile, ExportMetadata, PolicyBundle, Sim2SimReport, TrainingConfig
+
+    return P3RunState(
+        run_id=str(row["run_id"]),
+        attempt_id=str(row["attempt_id"]),
+        training_config=TrainingConfig.model_validate(row["training_config_json"]) if row["training_config_json"] else None,
+        checkpoint=CheckpointRecord.model_validate(row["checkpoint_json"]) if row["checkpoint_json"] else None,
+        export_metadata=ExportMetadata.model_validate(row["export_metadata_json"]) if row["export_metadata_json"] else None,
+        export_files=[ExportFile.model_validate(item) for item in (row["export_files_json"] or [])],
+        bundle=PolicyBundle.model_validate(row["bundle_json"]) if row["bundle_json"] else None,
+        sim2sim_report=Sim2SimReport.model_validate(row["sim2sim_report_json"]) if row["sim2sim_report_json"] else None,
+        artifact_ids=list(row["artifact_ids_json"] or []),
+        updated_at=_iso(row["updated_at"]),
+    )
 
 
 __all__ = ["PostgresUnitOfWork"]

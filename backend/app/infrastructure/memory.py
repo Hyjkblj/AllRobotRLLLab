@@ -20,6 +20,7 @@ from backend.app.domain.contracts import (
     OutboxEvent,
     ProjectMember,
     ProjectRecord,
+    P3RunState,
     RunEvent,
     RunRecord,
 )
@@ -252,6 +253,21 @@ class InMemoryArtifactRepository:
             )
 
 
+class InMemoryP3StateRepository:
+    def __init__(self, lock: threading.RLock) -> None:
+        self._lock = lock
+        self._states: dict[str, P3RunState] = {}
+
+    def get(self, run_id: str) -> P3RunState | None:
+        with self._lock:
+            return self._states.get(run_id)
+
+    def upsert(self, state: P3RunState) -> P3RunState:
+        with self._lock:
+            self._states[state.run_id] = state
+            return state
+
+
 class InMemoryUnitOfWork:
     """Shared-lock unit of work with the same shape as a DB transaction."""
 
@@ -265,6 +281,7 @@ class InMemoryUnitOfWork:
         self.outbox = InMemoryOutboxRepository(lock)
         self.assets = InMemoryAssetRepository(lock)
         self.artifacts = InMemoryArtifactRepository(lock)
+        self.p3_states = InMemoryP3StateRepository(lock)
 
     def __enter__(self) -> "InMemoryUnitOfWork":
         self._lock.acquire()

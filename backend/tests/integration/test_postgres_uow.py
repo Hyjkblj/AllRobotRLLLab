@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from backend.app.application.run_service import RunService
-from backend.app.domain.contracts import Actor
+from backend.app.domain.contracts import Actor, P3RunState, TrainingConfig
 from backend.app.infrastructure.postgres import PostgresDatabase
 from backend.app.infrastructure.postgres_uow import PostgresUnitOfWork
 
@@ -31,3 +31,12 @@ def test_postgres_uow_round_trip() -> None:
     assert attempts[0].attempt_id == attempt.attempt_id
     event = service.append_event(run_id=run.run_id, event_type="log", stage="pytest", message="postgres")
     assert service.list_events(run_id=run.run_id, actor=actor)[-1].seq == event.seq
+
+    state = P3RunState(run_id=run.run_id, attempt_id=attempt.attempt_id, training_config=TrainingConfig(motion_asset_version_id="motion-1"), updated_at="2026-01-01T00:00:00+00:00")
+    with PostgresUnitOfWork(dsn) as uow:
+        uow.p3_states.upsert(state)
+    with PostgresUnitOfWork(dsn) as uow:
+        restored = uow.p3_states.get(run.run_id)
+    assert restored is not None
+    assert restored.training_config is not None
+    assert restored.training_config.motion_asset_version_id == "motion-1"
