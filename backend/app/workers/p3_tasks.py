@@ -23,8 +23,8 @@ class P3TaskExecutor:
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = str(payload.get("operation", "")).strip().lower()
         run_id = str(payload["run_id"])
-        if settings.is_deployed and settings.p3_backend == "fake_smoke":
-            raise RuntimeError("P3_BACKEND=fake_smoke is development-only; configure the real Isaac/Unitree worker adapter")
+        if settings.is_deployed:
+            raise RuntimeError(f"real P3 backend '{settings.p3_backend}' is not registered in this platform image; refusing to run CPU smoke in a deployed environment")
         with self.training_service.run_service.uow:
             run = self.training_service.run_service.uow.runs.get(run_id)
             state = self.training_service.run_service.uow.p3_states.get(run_id)

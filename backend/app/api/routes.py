@@ -190,6 +190,11 @@ def _service_error(request: Request, error: RunServiceError) -> HTTPException:
     return _error(request, error.code, error.message, status_code=error.status_code)
 
 
+def _require_real_backend(request: Request) -> None:
+    if settings.is_deployed:
+        raise _error(request, "REAL_BACKEND_NOT_CONFIGURED", f"P3 backend '{settings.p3_backend}' is not registered; deployed API cannot execute CPU smoke", status_code=503)
+
+
 @router.get("/health")
 def health(request: Request) -> dict:
     return {"status": "ok", "request_id": _request_id(request), "contract_versions": ["robot_spec.v1", "source_motion_descriptor.v1", "train_motion_npz.v1", "run_manifest.v1"]}
@@ -614,6 +619,7 @@ def train_run(run_id: str, payload: TrainingConfig, request: Request) -> dict:
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
+    _require_real_backend(request)
     try:
         result = training_service.train_smoke(run_id=run_id, config=payload, worker_id=worker_id)
     except TrainingServiceError as exc:
@@ -630,6 +636,7 @@ def export_run(run_id: str, request: Request) -> dict:
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
+    _require_real_backend(request)
     try:
         bundle = training_service.export(run_id=run_id)
     except TrainingServiceError as exc:
@@ -646,6 +653,7 @@ def sim2sim_run(run_id: str, payload: Sim2SimRequest, request: Request) -> dict:
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
+    _require_real_backend(request)
     try:
         report = training_service.sim2sim(run_id=run_id, seeds=tuple(payload.seeds), thresholds=payload.thresholds)
     except TrainingServiceError as exc:

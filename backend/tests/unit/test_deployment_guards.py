@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.config.settings import settings
 from backend.app.main import app
+from backend.app.workers.p3_tasks import P3TaskExecutor
 
 
 def test_deployed_settings_require_durable_services_and_worker_token() -> None:
@@ -30,3 +31,18 @@ def test_worker_token_is_checked_when_configured() -> None:
         assert response.json()["error"]["code"] == "WORKER_AUTH_INVALID"
     finally:
         settings.worker_auth_token = original
+
+
+def test_deployed_worker_never_falls_back_to_cpu_smoke(tmp_path) -> None:
+    original = (settings.app_env, settings.p3_backend)
+    try:
+        settings.app_env = "staging"
+        settings.p3_backend = "isaac_lab"
+        try:
+            P3TaskExecutor(None).execute({"operation": "train", "run_id": "run-1"})
+        except RuntimeError as exc:
+            assert "refusing to run CPU smoke" in str(exc)
+        else:
+            raise AssertionError("deployed worker accepted the CPU smoke fallback")
+    finally:
+        settings.app_env, settings.p3_backend = original
