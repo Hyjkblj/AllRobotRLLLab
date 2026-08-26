@@ -46,7 +46,7 @@ API_PORT=8000
 ```bash
 docker login registry.example.com
 export PLATFORM_IMAGE=registry.example.com/robot/allrobotrl-platform
-export IMAGE_TAG="$GIT_SHA"
+export IMAGE_TAG="sha-$GIT_SHA"
 docker compose -f infra/compose/docker-compose.staging.yml --env-file .env.staging pull
 docker compose -f infra/compose/docker-compose.staging.yml --env-file .env.staging up -d
 docker compose -f infra/compose/docker-compose.staging.yml --env-file .env.staging ps
