@@ -8,11 +8,26 @@ G1 29 DoF RL 平台的分层开发基线。仓库只提交本项目源码、契�
 conda env create -f environment-platform.yml
 conda activate allrobotrl-platform
 python -m pip install -r requirements-platform.txt
+python -m pip install -e .
 python -m pytest -q
 uvicorn apps.api.main:app --reload
 ```
 
 API 地址：`http://127.0.0.1:8000/api/v1/health`。详细边界、接口和后续 P1/P2 工作见 [docs/P0实现说明.md](docs/P0实现说明.md) 与方案文档。
+
+运维入口安装项目自身代码后可直接使用 `robotlab`（也可执行 `python -m tools.robotlab`）：
+
+```bash
+robotlab doctor --json
+robotlab install
+robotlab init
+robotlab start --gpu
+robotlab status
+robotlab logs api
+robotlab stop
+```
+
+`doctor` 只检查并给出缺失组件的安装/配置指引，不会自动修改操作系统、Docker、Conda 或第三方运行时。
 
 P1 动作编辑和 Reward Builder 的接口与约束见 [docs/P1实现说明.md](docs/P1实现说明.md)。
 
@@ -73,6 +88,7 @@ export ISAACSIM_PATH=/opt/isaac-sim
 export GMR_PATH=$PWD/third_party/GMR-master
 export GVHMR_PATH=$PWD/third_party/GVHMR-main
 export UNITREE_MUJOCO_PATH=$PWD/third_party/unitree_mujoco-main
+python scripts/collect_runtime_manifest.py --output .runtime/runtime-manifest.json
 ```
 
 Windows 本地 MuJoCo 原型只需要 G1 MJCF/URDF 和网格位于 `third_party/GMR-master/assets/unitree_g1`；生产部署应将这些上游资产作为镜像或外部只读 volume 挂载。版本、许可证和 SHA-256 必须写入 Run Manifest，不能用未锁定的 `main` 分支替代。

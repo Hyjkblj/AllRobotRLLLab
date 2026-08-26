@@ -7,6 +7,8 @@ know about HTTP, persistence, Celery, or Isaac imports.
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -48,6 +50,40 @@ class UnitreeG1Adapter:
         value = self._spec.assets[key]
         return (self.repository_root / value).resolve()
 
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def asset_identity(self) -> dict[str, dict[str, str | int | bool | None]]:
+        """Return content identities without importing a simulator runtime."""
+        identities: dict[str, dict[str, str | int | bool | None]] = {}
+        for key, env_name in (("mujoco_xml_uri", "G1_MJCF_PATH"), ("urdf_uri", "G1_URDF_PATH")):
+            configured = os.getenv(env_name, "").strip()
+            path = Path(configured).expanduser() if configured else self._asset_path(key)
+            if not path.is_absolute():
+                path = self.repository_root / path
+            path = path.resolve()
+            item: dict[str, str | int | bool | None] = {"path": str(path), "exists": path.is_file(), "sha256": None, "size_bytes": None}
+            if path.is_file():
+                item["sha256"] = self._sha256(path)
+                item["size_bytes"] = path.stat().st_size
+            identities[key] = item
+        usd_path = os.getenv("G1_USD_PATH", "").strip()
+        if usd_path:
+            path = Path(usd_path).expanduser().resolve()
+            item = {"path": str(path), "exists": path.is_file(), "sha256": None, "size_bytes": None}
+            if path.is_file():
+                item["sha256"] = self._sha256(path)
+                item["size_bytes"] = path.stat().st_size
+            identities["isaac_usd_uri"] = item
+        else:
+            identities["isaac_usd_uri"] = {"path": None, "exists": False, "sha256": None, "size_bytes": None}
+        return identities
+
     def self_check(self) -> ValidationResult:
         issues: list[ValidationIssue] = []
         xml_path = self._asset_path("mujoco_xml_uri")
@@ -64,6 +100,17 @@ class UnitreeG1Adapter:
             )
 
         root = ET.parse(xml_path).getroot()
+        for key, env_name in (("mujoco_xml_uri", "G1_MJCF_SHA256"), ("urdf_uri", "G1_URDF_SHA256"), ("isaac_usd_uri", "G1_USD_SHA256")):
+            expected = os.getenv(env_name, "").strip().lower()
+            if not expected:
+                continue
+            identity = self.asset_identity()[key]
+            actual = identity.get("sha256")
+            if actual != expected:
+                issues.append(ValidationIssue(code="ROBOT_ASSET_HASH_MISMATCH", message=f"locked {key} hash differs from the configured runtime hash", severity=ValidationSeverity.BLOCKING_ERROR, field=f"assets.{key}", expected=expected, actual=actual, suggested_action=f"verify {env_name} and the mounted external asset"))
+        usd_identity = self.asset_identity()["isaac_usd_uri"]
+        if os.getenv("G1_USD_PATH", "").strip() and not usd_identity["exists"]:
+            issues.append(ValidationIssue(code="ROBOT_ISAAC_USD_MISSING", message="configured Isaac USD asset does not exist", severity=ValidationSeverity.BLOCKING_ERROR, field="assets.isaac_usd_uri", actual=usd_identity["path"], suggested_action="set G1_USD_PATH to the locked Isaac asset"))
         # The MJCF default section also contains an unnamed joint template;
         # only named runtime joints participate in the adapter contract.
         xml_joints = [element for element in root.iter("joint") if element.attrib.get("type", "hinge") == "hinge" and "name" in element.attrib]

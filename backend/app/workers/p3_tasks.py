@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.app.application.training_service import TrainingService
+from backend.app.config.settings import settings
 from backend.app.domain.contracts import Sim2SimThresholds, TrainingConfig
 from backend.app.domain.state_machine import RunStatus
 
@@ -22,6 +23,8 @@ class P3TaskExecutor:
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = str(payload.get("operation", "")).strip().lower()
         run_id = str(payload["run_id"])
+        if settings.is_deployed and settings.p3_backend == "fake_smoke":
+            raise RuntimeError("P3_BACKEND=fake_smoke is development-only; configure the real Isaac/Unitree worker adapter")
         with self.training_service.run_service.uow:
             run = self.training_service.run_service.uow.runs.get(run_id)
             state = self.training_service.run_service.uow.p3_states.get(run_id)

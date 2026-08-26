@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 import json
+import hmac
 from pathlib import Path
 from typing import Literal
 
@@ -168,6 +169,18 @@ def _execution_mode(request: Request) -> str:
     return request.headers.get("x-execution-mode", settings.execution_mode).strip().lower()
 
 
+def _worker_id(request: Request) -> str:
+    """Authenticate internal worker calls and return the stable worker id."""
+    worker_id = request.headers.get("x-worker-id", "").strip()
+    if not worker_id:
+        raise _error(request, "WORKER_AUTH_REQUIRED", "this operation requires an authenticated worker", status_code=403)
+    if settings.worker_auth_token:
+        supplied = request.headers.get("x-worker-token", "")
+        if not hmac.compare_digest(supplied, settings.worker_auth_token):
+            raise _error(request, "WORKER_AUTH_INVALID", "worker token is invalid", status_code=403)
+    return worker_id
+
+
 def _error(request: Request, code: str, message: str, *, status_code: int = 400, details: dict | None = None) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"error": {"code": code, "message": message, "stage": "api", "details": details or {}, "retryable": False}, "request_id": _request_id(request)})
 
@@ -280,11 +293,7 @@ def asset_upload_url(asset_version_id: str, request: Request) -> dict:
 
 @router.post("/assets/{asset_version_id}/validate")
 def validate_asset(asset_version_id: str, payload: AssetValidateRequest, request: Request) -> dict:
-    # This endpoint is intended for an authenticated internal worker.  The
-    # worker token integration is added at deployment; local P2 tests use the
-    # explicit X-Worker-Id marker to avoid exposing it as a user action.
-    if not request.headers.get("x-worker-id"):
-        raise _error(request, "WORKER_AUTH_REQUIRED", "asset validation is an internal worker operation", status_code=403)
+    _worker_id(request)
     try:
         version = asset_service.mark_validated(asset_version_id=asset_version_id, valid=payload.valid, sha256=payload.sha256, size_bytes=payload.size_bytes, rejection_code=payload.rejection_code)
     except RunServiceError as exc:
@@ -294,8 +303,7 @@ def validate_asset(asset_version_id: str, payload: AssetValidateRequest, request
 
 @router.post("/artifacts")
 def register_artifact(payload: ArtifactRegisterRequest, request: Request) -> dict:
-    if not request.headers.get("x-worker-id"):
-        raise _error(request, "WORKER_AUTH_REQUIRED", "artifact registration is an internal worker operation", status_code=403)
+    _worker_id(request)
     artifact = ArtifactRecord(artifact_id=str(uuid.uuid4()), created_at=utc_now(), **payload.model_dump())
     # Keep the run/attempt relationship authoritative in PostgreSQL/in-memory
     # repositories before accepting a worker-produced object index.
@@ -547,9 +555,7 @@ def retry_run(run_id: str, request: Request) -> dict:
 
 @router.post("/runs/{run_id}/status")
 def update_run_status(run_id: str, payload: RunStatusRequest, request: Request) -> dict:
-    worker_id = request.headers.get("x-worker-id")
-    if not worker_id:
-        raise _error(request, "WORKER_AUTH_REQUIRED", "run status updates are an internal worker operation", status_code=403)
+    worker_id = _worker_id(request)
     try:
         run = run_service.transition_run(run_id=run_id, target=payload.status, stage=payload.stage, message=payload.message)
         run, attempts = run_service.get_run(run_id=run_id, actor=Actor(user_id=run.created_by))
@@ -576,9 +582,7 @@ class RunEventAppendRequest(BaseModel):
 
 @router.post("/runs/{run_id}/heartbeat")
 def heartbeat_run(run_id: str, payload: RunHeartbeatRequest, request: Request) -> dict:
-    worker_id = request.headers.get("x-worker-id")
-    if not worker_id:
-        raise _error(request, "WORKER_AUTH_REQUIRED", "run heartbeat is an internal worker operation", status_code=403)
+    worker_id = _worker_id(request)
     try:
         attempt = run_service.heartbeat(run_id=run_id, worker_id=worker_id, gpu_uuid=payload.gpu_uuid)
     except RunServiceError as exc:
@@ -588,8 +592,7 @@ def heartbeat_run(run_id: str, payload: RunHeartbeatRequest, request: Request) -
 
 @router.post("/runs/{run_id}/events")
 def append_run_event(run_id: str, payload: RunEventAppendRequest, request: Request) -> dict:
-    if not request.headers.get("x-worker-id"):
-        raise _error(request, "WORKER_AUTH_REQUIRED", "run event writes are an internal worker operation", status_code=403)
+    _worker_id(request)
     try:
         event = run_service.append_event(run_id=run_id, event_type=payload.event_type, stage=payload.stage, level=payload.level, message=payload.message, payload=payload.payload)
     except RunServiceError as exc:
@@ -599,16 +602,15 @@ def append_run_event(run_id: str, payload: RunEventAppendRequest, request: Reque
 
 @router.post("/runs/{run_id}/train")
 def train_run(run_id: str, payload: TrainingConfig, request: Request) -> dict:
-    if not request.headers.get("x-worker-id"):
-        raise _error(request, "WORKER_AUTH_REQUIRED", "training is an internal worker operation", status_code=403)
+    worker_id = _worker_id(request)
     if _execution_mode(request) == "async":
         try:
-            submission = p3_dispatch_service.submit_train(run_id=run_id, config=payload, actor=_actor(request), worker_id=request.headers["x-worker-id"])
+            submission = p3_dispatch_service.submit_train(run_id=run_id, config=payload, actor=_actor(request), worker_id=worker_id)
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
     try:
-        result = training_service.train_smoke(run_id=run_id, config=payload, worker_id=request.headers["x-worker-id"])
+        result = training_service.train_smoke(run_id=run_id, config=payload, worker_id=worker_id)
     except TrainingServiceError as exc:
         raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
     return {"request_id": _request_id(request), "checkpoint": result.checkpoint.model_dump(mode="json"), "metrics": [metric.model_dump(mode="json") for metric in result.metrics], "artifacts": [artifact.model_dump(mode="json") for artifact in result.artifacts], "resource_version": result.checkpoint.sha256}
@@ -616,11 +618,10 @@ def train_run(run_id: str, payload: TrainingConfig, request: Request) -> dict:
 
 @router.post("/runs/{run_id}/export")
 def export_run(run_id: str, request: Request) -> dict:
-    if not request.headers.get("x-worker-id"):
-        raise _error(request, "WORKER_AUTH_REQUIRED", "export is an internal worker operation", status_code=403)
+    worker_id = _worker_id(request)
     if _execution_mode(request) == "async":
         try:
-            submission = p3_dispatch_service.submit_export(run_id=run_id, actor=_actor(request), worker_id=request.headers["x-worker-id"])
+            submission = p3_dispatch_service.submit_export(run_id=run_id, actor=_actor(request), worker_id=worker_id)
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
@@ -633,11 +634,10 @@ def export_run(run_id: str, request: Request) -> dict:
 
 @router.post("/runs/{run_id}/sim2sim")
 def sim2sim_run(run_id: str, payload: Sim2SimRequest, request: Request) -> dict:
-    if not request.headers.get("x-worker-id"):
-        raise _error(request, "WORKER_AUTH_REQUIRED", "sim2sim is an internal worker operation", status_code=403)
+    worker_id = _worker_id(request)
     if _execution_mode(request) == "async":
         try:
-            submission = p3_dispatch_service.submit_sim2sim(run_id=run_id, seeds=tuple(payload.seeds), thresholds=payload.thresholds, actor=_actor(request), worker_id=request.headers["x-worker-id"])
+            submission = p3_dispatch_service.submit_sim2sim(run_id=run_id, seeds=tuple(payload.seeds), thresholds=payload.thresholds, actor=_actor(request), worker_id=worker_id)
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})

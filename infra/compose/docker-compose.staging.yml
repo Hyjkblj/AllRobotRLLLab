@@ -59,6 +59,20 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
       MINIO_BUCKET: ${MINIO_BUCKET:-allrobotrl}
 
+  migrate:
+    image: ${PLATFORM_IMAGE:-allrobotrl-platform:${IMAGE_TAG:-local}}
+    build:
+      context: ../..
+      dockerfile: infra/docker/platform.Dockerfile
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: staging
+      DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
+    command: ["python", "-c", "import os; from pathlib import Path; from backend.app.infrastructure.postgres import PostgresDatabase; PostgresDatabase(os.environ['DATABASE_URL']).apply_migrations(Path('/app/infra/migrations'))"]
+
   api:
     image: ${PLATFORM_IMAGE:-allrobotrl-platform:${IMAGE_TAG:-local}}
     build:
@@ -72,15 +86,20 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
     environment:
+      APP_ENV: staging
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
+      P3_BACKEND: ${P3_BACKEND:-isaac_lab}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-allrobotrl}
       MINIO_SECURE: "false"
+      WORKER_AUTH_TOKEN: ${WORKER_AUTH_TOKEN:?WORKER_AUTH_TOKEN must be set}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
@@ -101,18 +120,65 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
     environment:
+      APP_ENV: staging
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
+      P3_BACKEND: ${P3_BACKEND:-isaac_lab}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-allrobotrl}
       MINIO_SECURE: "false"
+      WORKER_AUTH_TOKEN: ${WORKER_AUTH_TOKEN:?WORKER_AUTH_TOKEN must be set}
     volumes:
       - staging-runtime:/app/.runtime
-    command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "isaac-gpu,sim2sim-gpu"]
+    command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "cpu"]
+
+  worker-gpu:
+    profiles: ["gpu"]
+    image: ${PLATFORM_IMAGE:-allrobotrl-platform:${IMAGE_TAG:-local}}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: staging
+      DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
+      REDIS_URL: redis://redis:6379/0
+      EXECUTION_MODE: async
+      P3_BACKEND: ${P3_BACKEND:-isaac_lab}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-allrobotrl}
+      MINIO_SECURE: "false"
+      WORKER_AUTH_TOKEN: ${WORKER_AUTH_TOKEN:?WORKER_AUTH_TOKEN must be set}
+      ISAACLAB_PATH: /opt/IsaacLab
+      ISAACSIM_PATH: /opt/IsaacSim
+      GMR_PATH: /opt/GMR
+      GVHMR_PATH: /opt/GVHMR
+      UNITREE_MUJOCO_PATH: /opt/unitree_mujoco
+      UNITREE_RL_LAB_PATH: /opt/unitree_rl_lab
+    volumes:
+      - staging-runtime:/app/.runtime
+      - ${ISAACLAB_PATH:-/opt/IsaacLab}:/opt/IsaacLab:ro
+      - ${ISAACSIM_PATH:-/opt/IsaacSim}:/opt/IsaacSim:ro
+      - ${GMR_PATH:-/opt/GMR}:/opt/GMR:ro
+      - ${GVHMR_PATH:-/opt/GVHMR}:/opt/GVHMR:ro
+      - ${UNITREE_MUJOCO_PATH:-/opt/unitree_mujoco}:/opt/unitree_mujoco:ro
+      - ${UNITREE_RL_LAB_PATH:-/opt/unitree_rl_lab}:/opt/unitree_rl_lab:ro
+    gpus: all
+    command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "isaac-gpu,sim2sim-gpu", "--concurrency=1"]
 
 volumes:
   staging-postgres:

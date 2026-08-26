@@ -17,6 +17,8 @@ COPY apps ./apps
 COPY backend ./backend
 COPY packages ./packages
 COPY schemas ./schemas
+COPY tools ./tools
+COPY scripts ./scripts
 COPY infra/migrations ./infra/migrations
 COPY third_party/README.md ./third_party/README.md
 

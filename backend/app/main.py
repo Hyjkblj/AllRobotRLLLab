@@ -13,9 +13,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .api.routes import router
+from .config.settings import settings
 
 
 def create_app() -> FastAPI:
+    deployment_errors = settings.deployment_errors()
+    if deployment_errors:
+        raise RuntimeError("Invalid deployment configuration: " + "; ".join(deployment_errors))
     app = FastAPI(title="AllRobotRLLLab API", version="0.1.0")
 
     @app.middleware("http")
