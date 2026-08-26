@@ -174,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     logs = sub.add_parser("logs")
     logs.add_argument("service", nargs="?", default="api")
     logs.add_argument("--env-file", default=None)
+    logs.add_argument("--gpu", action="store_true")
     run = sub.add_parser("run", help="invoke a run operation through the API")
     run.add_argument("operation", choices=("train", "export", "sim2sim"))
     run.add_argument("run_id")
@@ -195,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {"start", "stop", "status", "logs"}:
         command = _compose_args(args)
         if args.command == "logs":
+            if args.gpu:
+                command += ["--profile", "gpu"]
             return _run(command + ["logs", "-f", args.service], capture=False)
         if args.compose_action == "up":
             command += ["--profile", "gpu"] if args.gpu else []
