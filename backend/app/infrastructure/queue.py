@@ -47,12 +47,35 @@ class CeleryTaskDispatcher:
     def __init__(self, broker_url: str) -> None:
         try:
             from celery import Celery
+            from redis import Redis
         except ImportError as exc:  # pragma: no cover - production worker image only
-            raise RuntimeError("Celery is required for the production task dispatcher") from exc
+            raise RuntimeError("Celery and redis are required for the production task dispatcher") from exc
         self._app = Celery("allrobotrl-platform", broker=broker_url)
+        self._redis = Redis.from_url(broker_url, decode_responses=True)
+        self._idempotency_ttl = 7 * 24 * 60 * 60
 
     def enqueue(self, *, queue: str, task: str, payload: dict, idempotency_key: str) -> str:
-        result = self._app.send_task(task, kwargs={"payload": payload, "idempotency_key": idempotency_key}, queue=queue)
+        redis_key = f"allrobotrl:task-idempotency:{idempotency_key}"
+        task_id = str(uuid.uuid4())
+        if not self._redis.set(redis_key, task_id, nx=True, ex=self._idempotency_ttl):
+            existing = self._redis.get(redis_key)
+            if existing:
+                return str(existing)
+            # The key can expire between SETNX and GET; retry once with a new
+            # token rather than enqueueing an untracked duplicate.
+            if not self._redis.set(redis_key, task_id, nx=True, ex=self._idempotency_ttl):
+                existing = self._redis.get(redis_key)
+                if existing:
+                    return str(existing)
+                raise RuntimeError("task idempotency key could not be reserved")
+        try:
+            result = self._app.send_task(task, kwargs={"payload": payload, "idempotency_key": idempotency_key}, queue=queue, task_id=task_id)
+        except Exception:
+            # A failed enqueue must be retryable. A concurrent caller that
+            # already replaced this token is left untouched.
+            if self._redis.get(redis_key) == task_id:
+                self._redis.delete(redis_key)
+            raise
         return str(result.id)
 
 
