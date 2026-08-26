@@ -91,6 +91,9 @@ def _doctor(args: argparse.Namespace) -> int:
         checks[variable] = {"ok": bool(value) and not placeholder, "configured": bool(value), "placeholder": placeholder, "fix": f"Set {variable} in .env.staging or the server secret manager"}
     for variable in ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH"):
         value = env(variable)
+        if variable == "ISAACSIM_PATH" and not value:
+            probe = subprocess.run([sys.executable, "-c", "import importlib.util,pathlib; s=importlib.util.find_spec('isaacsim'); print(pathlib.Path(s.origin).resolve().parent.parent if s and s.origin and pathlib.Path(s.origin).resolve().parent.name == 'isaacsim' else '')"], cwd=ROOT, capture_output=True, text=True, check=False)
+            value = probe.stdout.strip()
         checks[variable] = {"ok": bool(value) and Path(value).expanduser().is_dir(), "path": value or None, "fix": f"Set {variable} to the locked external runtime directory"}
     runtime_script = ROOT / "scripts" / "check_external_runtime.py"
     if all(checks[name].get("ok") for name in ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH")):

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import platform
@@ -30,6 +31,14 @@ PINNED_PATHS = {
     "UNITREE_MUJOCO_PATH": "unitree_mujoco",
     "UNITREE_RL_LAB_PATH": "unitree_rl_lab",
 }
+
+
+def _discover_isaacsim() -> Path | None:
+    spec = importlib.util.find_spec("isaacsim")
+    if spec is None or not spec.origin:
+        return None
+    origin = Path(spec.origin).resolve()
+    return origin.parent.parent if origin.parent.name == "isaacsim" else origin.parent
 
 
 def _command(*args: str) -> str | None:
@@ -80,6 +89,10 @@ def collect(root: Path) -> dict[str, Any]:
     external: dict[str, Any] = {}
     for variable, name in PINNED_PATHS.items():
         raw = os.getenv(variable, "").strip()
+        if variable == "ISAACSIM_PATH" and not raw:
+            discovered = _discover_isaacsim()
+            if discovered is not None:
+                raw = str(discovered)
         if not raw:
             external[name] = {"env": variable, "status": "not_configured"}
             continue

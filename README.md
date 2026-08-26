@@ -91,4 +91,11 @@ export UNITREE_MUJOCO_PATH=$PWD/third_party/unitree_mujoco-main
 python scripts/collect_runtime_manifest.py --output .runtime/runtime-manifest.json
 ```
 
+Isaac Sim 5.1 may be installed as the `isaacsim==5.1.0.0` Python package
+inside the active Conda environment instead of an `isaac-sim.sh` checkout. In
+that case `check_external_runtime.py`, `collect_runtime_manifest.py` and
+`robotlab doctor` discover the package automatically when `ISAACSIM_PATH` is
+unset. Set `ISAACSIM_PATH` explicitly when using a mounted SDK directory or a
+container image.
+
 Windows 本地 MuJoCo 原型只需要 G1 MJCF/URDF 和网格位于 `third_party/GMR-master/assets/unitree_g1`；生产部署应将这些上游资产作为镜像或外部只读 volume 挂载。版本、许可证和 SHA-256 必须写入 Run Manifest，不能用未锁定的 `main` 分支替代。

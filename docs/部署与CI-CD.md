@@ -81,6 +81,11 @@ celery -A backend.app.workers.celery_app:celery_app worker \
   --loglevel=INFO -Q isaac-gpu,sim2sim-gpu --concurrency=1
 ```
 
+目标服务器如果通过 Conda 安装 `isaacsim==5.1.0.0`，不要求存在
+`isaac-sim.sh`；运行时检查脚本会从当前 Python 环境的 `isaacsim` 包自动
+发现安装根目录。使用容器或独立 SDK 时仍应设置 `ISAACSIM_PATH`，并将该
+目录以只读方式挂载给 GPU worker。
+
 当前仓库的 Celery task 已建立稳定任务名、幂等键、late acknowledgement、worker lost 重投和 durable P3 state；真实 Isaac/RSL-RL runner、Unitree MuJoCo adapter 和 GPU lease 仍需在服务器阶段接入。没有 GPU 运行证据时，不能把 Run 标记为 `READY_TO_DOWNLOAD`。
 
 生产内部写接口要求同时提供 `X-Worker-Id` 和 `X-Worker-Token`。`WORKER_AUTH_TOKEN` 由服务器 Secret 管理器注入，长度至少 32 个字符；staging/production 缺失该变量时 API 会拒绝启动。

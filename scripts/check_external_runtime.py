@@ -7,6 +7,7 @@ import subprocess
 import sys
 import argparse
 import json
+import importlib.util
 from pathlib import Path
 
 
@@ -28,6 +29,17 @@ EXPECTED_REVISIONS = {
 OPTIONAL_PATHS = {"UNITREE_RL_LAB_PATH": "Unitree RL Lab"}
 
 
+def discover_isaacsim_path() -> Path | None:
+    """Resolve pip-installed Isaac Sim when no launcher directory is present."""
+    spec = importlib.util.find_spec("isaacsim")
+    if spec is None or not spec.origin:
+        return None
+    origin = Path(spec.origin).resolve()
+    # ``.../site-packages/isaacsim/__init__.py`` is the standard package
+    # layout.  Keep the site-packages root as the runtime mount identity.
+    return origin.parent.parent if origin.parent.name == "isaacsim" else origin.parent
+
+
 def git_revision(path: Path) -> str:
     result = subprocess.run(
         ["git", "-C", str(path), "rev-parse", "HEAD"],
@@ -46,6 +58,10 @@ def main() -> int:
     results: dict[str, dict[str, str | bool | None]] = {}
     for variable, label in REQUIRED_PATHS.items():
         raw = os.getenv(variable, "").strip()
+        if variable == "ISAACSIM_PATH" and not raw:
+            discovered = discover_isaacsim_path()
+            if discovered is not None:
+                raw = str(discovered)
         if not raw:
             failures.append(f"{variable} is not set ({label})")
             results[variable] = {"label": label, "configured": False, "path": None, "revision": None}
