@@ -30,6 +30,10 @@ class P3TaskExecutor:
             state = self.training_service.run_service.uow.p3_states.get(run_id)
         if run is None:
             raise ValueError(f"run not found: {run_id}")
+        if run.status == RunStatus.CANCELLED:
+            # A queued message can outlive a user cancellation.  Acknowledge
+            # it without starting a simulator or creating new artifacts.
+            return {"operation": operation, "run_id": run_id, "status": "CANCELLED", "cancelled": True}
         if operation == "train":
             if state is not None and state.checkpoint is not None and run.status in {RunStatus.TRAINING_SUCCEEDED, RunStatus.EXPORTING, RunStatus.EXPORTED, RunStatus.SIM2SIM_QUEUED, RunStatus.SIM2SIM_RUNNING, RunStatus.SIM2SIM_PASSED, RunStatus.READY_TO_DOWNLOAD}:
                 return {"operation": operation, "run_id": run_id, "status": "SUCCEEDED", "checkpoint_id": state.checkpoint.checkpoint_id, "replayed": True}
