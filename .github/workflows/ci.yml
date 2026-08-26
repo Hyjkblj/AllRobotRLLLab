@@ -48,12 +48,18 @@ jobs:
         run: git diff --check
       - name: Compile Python modules
         run: python -m compileall -q adapters apps backend packages scripts
+      - name: Verify operator CLI and runtime manifest tooling
+        run: |
+          python -m tools.robotlab --help
+          python scripts/collect_runtime_manifest.py --output .runtime/ci-runtime-manifest.json
       - name: Run tests with PostgreSQL
         env:
           TEST_DATABASE_URL: postgresql://allrobotrl:allrobotrl_ci@127.0.0.1:5432/allrobotrl
         run: python -m pytest -q
       - name: Validate Compose files
-        run: docker compose -f infra/compose/docker-compose.p2.yml config
+        run: |
+          docker compose -f infra/compose/docker-compose.p2.yml config
+          docker compose -f infra/compose/docker-compose.staging.yml --env-file .env.staging.example --profile gpu config --quiet
 
   frontend:
     name: React build
