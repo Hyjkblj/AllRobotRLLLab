@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from adapters.unitree_g1_29dof import UnitreeG1Adapter
 from backend.app.adapters.motion import MotionDetectionError, MotionSourceRegistry
 from backend.app.application.motion_editor import MotionArrays, MotionEditVersionStore, MotionEditor
+from backend.app.application.manifest_service import load_runtime_versions
 from backend.app.application.asset_service import AssetService
 from backend.app.application.artifact_service import ArtifactService
 from backend.app.application.p3_dispatcher import P3DispatchError, P3DispatchService
@@ -488,13 +489,17 @@ def _create_run_arguments(payload: RunCreateRequest, request: Request) -> dict:
         }
     if not payload.project_id or not payload.robot or not payload.reward_config_sha256 or not payload.training_config_sha256:
         raise _error(request, "RUN_REQUEST_INVALID", "project_id, robot, motion, reward and training hashes are required")
+    runtime = payload.runtime
+    if runtime is None:
+        loaded_runtime = load_runtime_versions(settings.runtime_manifest_path)
+        runtime = loaded_runtime.model_dump(mode="json") if loaded_runtime is not None else None
     return {
         "project_id": payload.project_id,
         "robot": payload.robot,
         "motion": payload.motion,
         "reward_config_sha256": payload.reward_config_sha256,
         "training_config_sha256": payload.training_config_sha256,
-        "runtime": payload.runtime,
+        "runtime": runtime,
         "execution": payload.execution,
         "licenses": payload.licenses,
         "parent_run_id": payload.parent_run_id,

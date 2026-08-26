@@ -22,6 +22,7 @@ class Settings:
         self.minio_bucket = os.getenv("MINIO_BUCKET", "allrobotrl")
         self.minio_secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
         self.worker_auth_token = os.getenv("WORKER_AUTH_TOKEN", "").strip()
+        self.runtime_manifest_path = Path(os.getenv("RUNTIME_MANIFEST_PATH", str(self.repository_root / ".runtime" / "runtime-manifest.json"))).expanduser().resolve()
 
     @property
     def is_deployed(self) -> bool:
