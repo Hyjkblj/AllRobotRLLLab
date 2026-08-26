@@ -41,7 +41,7 @@ def load_runtime_versions(path: Path) -> RuntimeVersions | None:
             "container_digest": os.getenv("CONTAINER_DIGEST", "pending"),
         }
         return RuntimeVersions.model_validate(values)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
         return None
 
 
