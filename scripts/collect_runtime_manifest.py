@@ -53,9 +53,11 @@ def _sha256(path: Path) -> str:
 
 
 def _asset_identity(root: Path) -> dict[str, Any]:
+    gmr_root = os.getenv("GMR_PATH", "").strip()
+    default_gmr = Path(gmr_root).expanduser() if gmr_root else root / "third_party" / "GMR-master"
     candidates = {
-        "mujoco_xml": os.getenv("G1_MJCF_PATH", "third_party/GMR-master/assets/unitree_g1/g1_mocap_29dof.xml"),
-        "urdf": os.getenv("G1_URDF_PATH", "third_party/GMR-master/assets/unitree_g1/g1_custom_collision_29dof.urdf"),
+        "mujoco_xml": os.getenv("G1_MJCF_PATH", str(default_gmr / "assets" / "unitree_g1" / "g1_mocap_29dof.xml")),
+        "urdf": os.getenv("G1_URDF_PATH", str(default_gmr / "assets" / "unitree_g1" / "g1_custom_collision_29dof.urdf")),
         "isaac_usd": os.getenv("G1_USD_PATH", ""),
     }
     result: dict[str, Any] = {}

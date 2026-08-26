@@ -48,6 +48,15 @@ class UnitreeG1Adapter:
 
     def _asset_path(self, key: str) -> Path:
         value = self._spec.assets[key]
+        explicit = {"mujoco_xml_uri": "G1_MJCF_PATH", "urdf_uri": "G1_URDF_PATH"}.get(key)
+        if explicit and os.getenv(explicit, "").strip():
+            return Path(os.getenv(explicit, "").strip()).expanduser().resolve()
+        # Production keeps GMR assets outside Git.  Translate the repository
+        # URI in RobotSpec to the configured external checkout when present.
+        gmr_root = os.getenv("GMR_PATH", "").strip()
+        prefix = "third_party/GMR-master/"
+        if gmr_root and value.startswith(prefix):
+            return (Path(gmr_root).expanduser() / value[len(prefix):]).resolve()
         return (self.repository_root / value).resolve()
 
     @staticmethod
