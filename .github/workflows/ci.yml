@@ -52,6 +52,7 @@ jobs:
         run: |
           python -m tools.robotlab --help
           python scripts/collect_runtime_manifest.py --output .runtime/ci-runtime-manifest.json
+          python scripts/probe_isaacsim.py --help
       - name: Run tests with PostgreSQL
         env:
           TEST_DATABASE_URL: postgresql://allrobotrl:allrobotrl_ci@127.0.0.1:5432/allrobotrl

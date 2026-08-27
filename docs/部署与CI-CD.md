@@ -86,6 +86,16 @@ celery -A backend.app.workers.celery_app:celery_app worker \
 发现安装根目录。使用容器或独立 SDK 时仍应设置 `ISAACSIM_PATH`，并将该
 目录以只读方式挂载给 GPU worker。
 
+部署验收先执行仓库内的 physics-only probe：
+
+```bash
+python scripts/probe_isaacsim.py --frames 5 --output .runtime/isaacsim-probe.json
+```
+
+该命令使用 `experience=None` 和最小 PhysX 扩展集，避免默认 RTX 体验在无
+显示环境下干扰启动证据。若输出 `startup`、`update` 均为 `passed`，即可
+继续验证 Isaac Lab task；优雅关闭用 `--close` 单独执行并单独记录结果。
+
 当前仓库的 Celery task 已建立稳定任务名、幂等键、late acknowledgement、worker lost 重投和 durable P3 state；真实 Isaac/RSL-RL runner、Unitree MuJoCo adapter 和 GPU lease 仍需在服务器阶段接入。没有 GPU 运行证据时，不能把 Run 标记为 `READY_TO_DOWNLOAD`。
 
 生产内部写接口要求同时提供 `X-Worker-Id` 和 `X-Worker-Token`。`WORKER_AUTH_TOKEN` 由服务器 Secret 管理器注入，长度至少 32 个字符；staging/production 缺失该变量时 API 会拒绝启动。

@@ -98,4 +98,19 @@ that case `check_external_runtime.py`, `collect_runtime_manifest.py` and
 unset. Set `ISAACSIM_PATH` explicitly when using a mounted SDK directory or a
 container image.
 
+在无 X Server 的 GPU 服务器上，先用 physics-only probe 验证 Isaac Sim
+启动和 PhysX 更新，不要直接把 RTX shutdown 的段错误当成训练失败：
+
+```bash
+python scripts/probe_isaacsim.py \
+  --frames 5 \
+  --output .runtime/isaacsim-probe.json
+# 需要专门验证退出路径时再加 --close
+python scripts/probe_isaacsim.py --frames 5 --close
+```
+
+输出中的 `startup=passed` 和 `update=passed` 才表示运行时可用于物理仿真；
+`--close` 失败应单独记录为 Isaac Sim 上游关闭问题。该 probe 不执行训练、
+不下载资产，也不写入第三方目录。
+
 Windows 本地 MuJoCo 原型只需要 G1 MJCF/URDF 和网格位于 `third_party/GMR-master/assets/unitree_g1`；生产部署应将这些上游资产作为镜像或外部只读 volume 挂载。版本、许可证和 SHA-256 必须写入 Run Manifest，不能用未锁定的 `main` 分支替代。
