@@ -67,6 +67,10 @@ def _asset_identity(root: Path) -> dict[str, Any]:
     candidates = {
         "mujoco_xml": os.getenv("G1_MJCF_PATH", str(default_gmr / "assets" / "unitree_g1" / "g1_mocap_29dof.xml")),
         "urdf": os.getenv("G1_URDF_PATH", str(default_gmr / "assets" / "unitree_g1" / "g1_custom_collision_29dof.urdf")),
+        # Unitree RL Lab's G1 29 DoF mimic task imports this URDF and lets
+        # Isaac Lab generate the runtime USD representation. Keep it separate
+        # from the GMR URDF used by the motion/contract adapter.
+        "isaac_urdf": os.getenv("G1_ISAAC_URDF_PATH", ""),
         "isaac_usd": os.getenv("G1_USD_PATH", ""),
     }
     result: dict[str, Any] = {}

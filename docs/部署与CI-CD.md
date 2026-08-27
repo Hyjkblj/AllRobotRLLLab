@@ -77,6 +77,7 @@ export ISAACSIM_PATH=/opt/isaac-sim
 export GMR_PATH=/opt/allrobotrl/third_party/GMR-master
 export GVHMR_PATH=/opt/allrobotrl/third_party/GVHMR-main
 export UNITREE_MUJOCO_PATH=/opt/allrobotrl/third_party/unitree_mujoco-main
+export G1_ISAAC_URDF_PATH=/opt/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.urdf
 celery -A backend.app.workers.celery_app:celery_app worker \
   --loglevel=INFO -Q isaac-gpu,sim2sim-gpu --concurrency=1
 ```
@@ -99,6 +100,11 @@ python scripts/probe_isaacsim.py --frames 5 --output .runtime/isaacsim-probe.jso
 当前仓库的 Celery task 已建立稳定任务名、幂等键、late acknowledgement、worker lost 重投和 durable P3 state；真实 Isaac/RSL-RL runner、Unitree MuJoCo adapter 和 GPU lease 仍需在服务器阶段接入。没有 GPU 运行证据时，不能把 Run 标记为 `READY_TO_DOWNLOAD`。
 
 生产内部写接口要求同时提供 `X-Worker-Id` 和 `X-Worker-Token`。`WORKER_AUTH_TOKEN` 由服务器 Secret 管理器注入，长度至少 32 个字符；staging/production 缺失该变量时 API 会拒绝启动。
+
+当前 Unitree RL Lab 的 G1 29 DoF mimic 任务使用
+`G1_ISAAC_URDF_PATH` 指向 Unitree ROS 的 URDF，并由 Isaac Lab 在运行时转换
+为 USD；因此该任务不需要本地 `G1_USD_PATH`。只有使用
+`UnitreeUsdFileCfg` 的任务才需要配置本地或可访问的 USD 资产。
 
 ## 5. 发布和回滚
 

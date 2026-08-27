@@ -88,6 +88,7 @@ export ISAACSIM_PATH=/opt/isaac-sim
 export GMR_PATH=$PWD/third_party/GMR-master
 export GVHMR_PATH=$PWD/third_party/GVHMR-main
 export UNITREE_MUJOCO_PATH=$PWD/third_party/unitree_mujoco-main
+export G1_ISAAC_URDF_PATH=/opt/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.urdf
 python scripts/collect_runtime_manifest.py --output .runtime/runtime-manifest.json
 ```
 
@@ -114,3 +115,9 @@ python scripts/probe_isaacsim.py --frames 5 --close
 不下载资产，也不写入第三方目录。
 
 Windows 本地 MuJoCo 原型只需要 G1 MJCF/URDF 和网格位于 `third_party/GMR-master/assets/unitree_g1`；生产部署应将这些上游资产作为镜像或外部只读 volume 挂载。版本、许可证和 SHA-256 必须写入 Run Manifest，不能用未锁定的 `main` 分支替代。
+
+Unitree RL Lab 的 G1 29 DoF mimic 配置使用 Unitree ROS 的
+`g1_29dof_rev_1_0.urdf`（通过 Isaac Lab URDF importer 在运行时生成
+USD），因此不要求预先提供本地 `G1_USD_PATH`。设置
+`G1_ISAAC_URDF_PATH` 后，runtime manifest 会单独记录该训练 URDF 的路径、
+大小和 SHA-256；`G1_USD_PATH` 仅用于实际选择 USD spawn 配置的任务。
