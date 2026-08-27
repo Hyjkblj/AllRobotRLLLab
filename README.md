@@ -10,24 +10,27 @@ conda activate allrobotrl-platform
 python -m pip install -r requirements-platform.txt
 python -m pip install -e .
 python -m pytest -q
-uvicorn apps.api.main:app --reload
+python -m tools.robotlab init --mode local_file
+python -m tools.robotlab start --mode local_file
 ```
 
-API 地址：`http://127.0.0.1:8000/api/v1/health`。详细边界、接口和后续 P1/P2 工作见 [docs/P0实现说明.md](docs/P0实现说明.md) 与方案文档。
+API 地址：`http://127.0.0.1:8000/api/v1/health`。默认开发模式是无数据库的 Local File Mode，运行数据写入 `runtime/`，不需要 Docker、PostgreSQL、Redis 或 MinIO。需要团队共享或远程 worker 时，再显式使用 Compose Mode。详细边界、接口和后续 P1/P2 工作见 [docs/P0实现说明.md](docs/P0实现说明.md)、[docs/P2实现说明.md](docs/P2实现说明.md) 与方案文档。
 
 运维入口安装项目自身代码后可直接使用 `robotlab`（也可执行 `python -m tools.robotlab`）：
 
 ```bash
 robotlab doctor --json
 robotlab install
-robotlab init
-robotlab start --gpu
+robotlab init --mode local_file
+robotlab start --mode local_file
 robotlab status
 robotlab logs api
 robotlab stop
 ```
 
 `doctor` 只检查并给出缺失组件的安装/配置指引，不会自动修改操作系统、Docker、Conda 或第三方运行时。
+
+Local File Mode 的运行目录可以通过 `ROBOTLAB_RUNTIME_DIR` 指定；`robotlab start --mode local_file` 会启动本地 API 和持久化任务 worker。切换到 PostgreSQL/Redis/MinIO 时使用 `robotlab init --mode compose` 和 staging Compose 配置。
 
 P1 动作编辑和 Reward Builder 的接口与约束见 [docs/P1实现说明.md](docs/P1实现说明.md)。
 

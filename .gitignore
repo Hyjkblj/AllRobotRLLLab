@@ -6,6 +6,7 @@ __pycache__/
 frontend-prototype/react-app/dist/
 frontend-prototype/.runtime/
 .runtime/
+runtime/
 .env
 .env.*
 !.env.staging.example

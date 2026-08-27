@@ -29,33 +29,35 @@ class RunStatus(StrEnum):
     READY_TO_DOWNLOAD = "READY_TO_DOWNLOAD"
     FAILED = "FAILED"
     FAILED_NEEDS_REVIEW = "FAILED_NEEDS_REVIEW"
+    INTERRUPTED = "INTERRUPTED"
     CANCELLED = "CANCELLED"
 
 
 _TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.CREATED: frozenset({RunStatus.UPLOADING, RunStatus.VALIDATING, RunStatus.CANCELLED}),
-    RunStatus.UPLOADING: frozenset({RunStatus.UPLOADED, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.UPLOADED: frozenset({RunStatus.VALIDATING, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.VALIDATING: frozenset({RunStatus.GVHMR_RUNNING, RunStatus.GMR_RUNNING, RunStatus.MOTION_COMPILING, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.GVHMR_RUNNING: frozenset({RunStatus.GVHMR_READY, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.GVHMR_READY: frozenset({RunStatus.GMR_RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.GMR_RUNNING: frozenset({RunStatus.RETARGET_READY, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.RETARGET_READY: frozenset({RunStatus.MOTION_COMPILING, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.MOTION_COMPILING: frozenset({RunStatus.MOTION_READY, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.MOTION_READY: frozenset({RunStatus.MOTION_EDITING, RunStatus.TRAINING_PREPARING, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.MOTION_EDITING: frozenset({RunStatus.MOTION_VALIDATING, RunStatus.CANCELLED}),
-    RunStatus.MOTION_VALIDATING: frozenset({RunStatus.MOTION_READY, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.TRAINING_PREPARING: frozenset({RunStatus.TRAINING, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.TRAINING: frozenset({RunStatus.TRAINING_SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.TRAINING_SUCCEEDED: frozenset({RunStatus.EXPORTING, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.EXPORTING: frozenset({RunStatus.EXPORTED, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.EXPORTED: frozenset({RunStatus.SIM2SIM_QUEUED, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.SIM2SIM_QUEUED: frozenset({RunStatus.SIM2SIM_RUNNING, RunStatus.FAILED, RunStatus.CANCELLED}),
-    RunStatus.SIM2SIM_RUNNING: frozenset({RunStatus.SIM2SIM_PASSED, RunStatus.FAILED, RunStatus.CANCELLED}),
+    RunStatus.UPLOADING: frozenset({RunStatus.UPLOADED, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.UPLOADED: frozenset({RunStatus.VALIDATING, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.VALIDATING: frozenset({RunStatus.GVHMR_RUNNING, RunStatus.GMR_RUNNING, RunStatus.MOTION_COMPILING, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.GVHMR_RUNNING: frozenset({RunStatus.GVHMR_READY, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.GVHMR_READY: frozenset({RunStatus.GMR_RUNNING, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.GMR_RUNNING: frozenset({RunStatus.RETARGET_READY, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.RETARGET_READY: frozenset({RunStatus.MOTION_COMPILING, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.MOTION_COMPILING: frozenset({RunStatus.MOTION_READY, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.MOTION_READY: frozenset({RunStatus.MOTION_EDITING, RunStatus.TRAINING_PREPARING, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.MOTION_EDITING: frozenset({RunStatus.MOTION_VALIDATING, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.MOTION_VALIDATING: frozenset({RunStatus.MOTION_READY, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.TRAINING_PREPARING: frozenset({RunStatus.TRAINING, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.TRAINING: frozenset({RunStatus.TRAINING_SUCCEEDED, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.TRAINING_SUCCEEDED: frozenset({RunStatus.EXPORTING, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.EXPORTING: frozenset({RunStatus.EXPORTED, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.EXPORTED: frozenset({RunStatus.SIM2SIM_QUEUED, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.SIM2SIM_QUEUED: frozenset({RunStatus.SIM2SIM_RUNNING, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
+    RunStatus.SIM2SIM_RUNNING: frozenset({RunStatus.SIM2SIM_PASSED, RunStatus.FAILED, RunStatus.INTERRUPTED, RunStatus.CANCELLED}),
     RunStatus.SIM2SIM_PASSED: frozenset({RunStatus.READY_TO_DOWNLOAD, RunStatus.FAILED}),
     RunStatus.READY_TO_DOWNLOAD: frozenset(),
     RunStatus.FAILED: frozenset({RunStatus.FAILED_NEEDS_REVIEW, RunStatus.UPLOADED, RunStatus.TRAINING_PREPARING, RunStatus.CANCELLED}),
     RunStatus.FAILED_NEEDS_REVIEW: frozenset({RunStatus.CANCELLED}),
+    RunStatus.INTERRUPTED: frozenset({RunStatus.TRAINING_PREPARING, RunStatus.FAILED, RunStatus.CANCELLED}),
     RunStatus.CANCELLED: frozenset(),
 }
 
@@ -75,4 +77,3 @@ def transition(current: RunStatus, target: RunStatus) -> RunStatus:
 
 
 __all__ = ["InvalidTransition", "RunStatus", "can_transition", "transition"]
-

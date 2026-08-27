@@ -27,6 +27,7 @@ from backend.app.application.training_service import TrainingService, TrainingSe
 from backend.app.config.settings import settings
 from backend.app.domain.contracts import Actor, ArtifactRecord, AssetKind, LicenseInfo, MotionEditConfig, ProjectRole, RewardConfig, RunManifest, RunStatus, Sim2SimThresholds, TrainingConfig
 from backend.app.infrastructure.memory import InMemoryUnitOfWork
+from backend.app.infrastructure.local_file import LocalFileUnitOfWork
 from backend.app.infrastructure.local import build_object_store
 from backend.app.infrastructure.postgres import PostgresDatabase
 from backend.app.infrastructure.postgres_uow import PostgresUnitOfWork
@@ -40,14 +41,23 @@ motion_registry = MotionSourceRegistry()
 motion_edit_store = MotionEditVersionStore()
 reward_config_store = RewardConfigVersionStore()
 motion_editor = MotionEditor(g1_adapter.get_spec(), ik_solver=g1_adapter.create_ik_solver())
-uow = PostgresUnitOfWork(settings.database_url) if settings.database_url else InMemoryUnitOfWork()
+if settings.database_url:
+    uow = PostgresUnitOfWork(settings.database_url)
+elif settings.storage_mode == "local_file":
+    uow = LocalFileUnitOfWork(settings.runtime_root)
+else:
+    uow = InMemoryUnitOfWork()
 run_service = RunService(uow)
 object_store = build_object_store(settings)
 asset_service = AssetService(uow, object_store)
 artifact_service = ArtifactService(uow, object_store)
-training_service = TrainingService(run_service=run_service, robot_adapter=g1_adapter, workspace=settings.repository_root / ".runtime" / "p3", artifact_service=artifact_service, object_store=object_store)
+training_service = TrainingService(run_service=run_service, robot_adapter=g1_adapter, workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store)
 if settings.execution_mode == "async" and settings.redis_url:
     p3_task_dispatcher = CeleryTaskDispatcher(settings.redis_url)
+elif settings.storage_mode == "local_file":
+    from backend.app.infrastructure.queue import LocalFileTaskDispatcher
+
+    p3_task_dispatcher = LocalFileTaskDispatcher(settings.runtime_root / "scheduler")
 else:
     p3_task_dispatcher = InMemoryTaskDispatcher()
 p3_dispatch_service = P3DispatchService(run_service=run_service, training_service=training_service, task_dispatcher=p3_task_dispatcher)
@@ -197,7 +207,7 @@ def _require_real_backend(request: Request) -> None:
 
 @router.get("/health")
 def health(request: Request) -> dict:
-    return {"status": "ok", "request_id": _request_id(request), "contract_versions": ["robot_spec.v1", "source_motion_descriptor.v1", "train_motion_npz.v1", "run_manifest.v1"]}
+    return {"status": "ok", "request_id": _request_id(request), "storage_mode": settings.storage_mode, "runtime_root": str(settings.runtime_root), "contract_versions": ["robot_spec.v1", "source_motion_descriptor.v1", "train_motion_npz.v1", "run_manifest.v1"]}
 
 
 @router.get("/health/infrastructure")
@@ -225,7 +235,7 @@ def infrastructure_health(request: Request) -> dict:
     else:
         checks["minio"] = {"configured": False, "healthy": False, "state": "pending"}
     status = "ok" if all(check["configured"] and check["healthy"] for check in checks.values()) else ("degraded" if any(check["configured"] and not check["healthy"] for check in checks.values()) else "pending")
-    return {"status": status, "request_id": _request_id(request), "checks": checks}
+    return {"status": status, "request_id": _request_id(request), "storage_mode": settings.storage_mode, "runtime_root": str(settings.runtime_root), "checks": checks}
 
 
 @router.post("/projects")

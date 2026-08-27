@@ -11,6 +11,11 @@ class Settings:
         self.repository_root = Path(__file__).resolve().parents[3]
         self.motion_asset_root = Path(os.getenv("MOTION_ASSET_ROOT", str(self.repository_root))).resolve()
         self.app_env = os.getenv("APP_ENV", "development").strip().lower()
+        requested_mode = os.getenv("ROBOTLAB_MODE", os.getenv("ROBOTLAB_STORAGE_MODE", "")).strip().lower()
+        self.storage_mode = requested_mode or ("compose" if self.app_env in {"staging", "production"} else "local_file")
+        if self.storage_mode not in {"local_file", "memory", "compose"}:
+            raise ValueError("ROBOTLAB_MODE must be local_file, memory or compose")
+        self.runtime_root = Path(os.getenv("ROBOTLAB_RUNTIME_DIR", str(self.repository_root / "runtime"))).expanduser().resolve()
         self.api_version = "v1"
         self.execution_mode = os.getenv("EXECUTION_MODE", "sync_smoke").strip().lower()
         self.p3_backend = os.getenv("P3_BACKEND", "fake_smoke").strip().lower()
