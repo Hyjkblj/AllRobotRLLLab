@@ -58,6 +58,18 @@ def _api_probe(url: str) -> dict[str, Any]:
         return {"ok": False, "error": type(exc).__name__}
 
 
+def _wait_for_api(url: str, process: subprocess.Popen[bytes] | subprocess.Popen[str], *, timeout_seconds: float = 30.0) -> bool:
+    """Wait until a locally spawned API is healthy or its process exits."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return False
+        if _api_probe(url).get("ok"):
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def _load_dotenv(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.is_file():
@@ -223,6 +235,14 @@ def _start_local(args: argparse.Namespace) -> int:
     command = [sys.executable, "-m", "uvicorn", "apps.api.main:app", "--host", args.host, "--port", str(args.port)]
     process = _spawn_local_process(runtime_root, "api", command, child_env)
     worker = _spawn_local_process(runtime_root, "worker", [sys.executable, "-m", "backend.app.workers.local_worker"], child_env)
+    probe_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
+    api_url = f"http://{probe_host}:{args.port}"
+    if not _wait_for_api(api_url, process):
+        for child in (process, worker):
+            if child.poll() is None:
+                child.terminate()
+        print(f"Local API failed health check; inspect {runtime_root / 'processes' / 'api.log'}", file=sys.stderr)
+        return 1
     print(f"Started Local File Mode API on http://{args.host}:{args.port} (pid {process.pid})")
     print(f"Started Local File Mode worker (pid {worker.pid})")
     return 0
