@@ -12,8 +12,14 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
+try:
+    # Keep PostgreSQL an optional runtime dependency.  Local File Mode imports
+    # this module through the API route wiring but never opens a connection.
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal installs
+    dict_row = None
+    Jsonb = None
 
 from backend.app.domain.contracts import (
     AssetRecord,
@@ -390,7 +396,10 @@ class PostgresUnitOfWork:
         self.connection = None
 
     def __enter__(self) -> "PostgresUnitOfWork":
-        import psycopg
+        try:
+            import psycopg
+        except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
+            raise RuntimeError("PostgreSQL mode requires psycopg; install the project's infra extra") from exc
 
         self.connection = psycopg.connect(self.dsn)
         self.projects = PostgresProjectRepository(self.connection)
