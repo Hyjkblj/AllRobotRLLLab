@@ -33,6 +33,17 @@ source /ai/python/miniconda3/etc/profile.d/conda.sh
 conda install -n allrobotrl-platform -c conda-forge nodejs=20 -y
 ```
 
+If the server only has the existing `allrobotrl-mujoco` environment, the
+prototype can use that project environment as well:
+
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
+conda install -n allrobotrl-mujoco -c conda-forge nodejs=20 -y
+conda activate allrobotrl-mujoco
+node --version
+npm --version
+```
+
 Run the frontend from that environment:
 
 ```bash

@@ -19,6 +19,17 @@ conda install -n allrobotrl-platform -c conda-forge nodejs=20 -y
 conda activate allrobotrl-platform
 ```
 
+服务器若只有已经创建好的 `allrobotrl-mujoco` 环境，可直接在该项目环境
+中安装同一版本的 Node.js，用于当前 MuJoCo 原型和 React 前端：
+
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
+conda install -n allrobotrl-mujoco -c conda-forge nodejs=20 -y
+conda activate allrobotrl-mujoco
+node --version
+npm --version
+```
+
 启动 MuJoCo 服务仍使用独立的 `allrobotrl-mujoco` 环境。前端在 `allrobotrl-platform` 环境中启动：
 
 ```bash
