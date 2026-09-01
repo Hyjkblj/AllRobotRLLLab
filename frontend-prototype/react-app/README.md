@@ -2,17 +2,54 @@
 
 ## 启动
 
-在 PowerShell 中执行：
+在服务器上使用项目的 `allrobotrl-platform` Conda 环境管理 Node.js，不依赖系统 Node.js：
 
-```powershell
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
 conda activate allrobotrl-platform
+node --version  # v20.x
+npm --version
+```
+
+如果该环境已经存在但没有 Node.js：
+
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
+conda install -n allrobotrl-platform -c conda-forge nodejs=20 -y
+conda activate allrobotrl-platform
+```
+
+启动 MuJoCo 服务仍使用独立的 `allrobotrl-mujoco` 环境。前端在 `allrobotrl-platform` 环境中启动：
+
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
+conda activate allrobotrl-mujoco
+cd ~/AllRobotRLLLab
 python -m pip install -r frontend-prototype/requirements-mujoco.txt
 python frontend-prototype/mujoco_service.py
 ```
 
 另开一个终端启动 React：
 
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
+conda activate allrobotrl-platform
+cd ~/AllRobotRLLLab/frontend-prototype/react-app
+npm ci
+npm run dev -- --host 127.0.0.1 --port 4173
+```
+
+Windows 本地开发仍可直接使用 PowerShell：
+
 ```powershell
+conda activate allrobotrl-mujoco
+python frontend-prototype/mujoco_service.py
+```
+
+另开一个终端：
+
+```powershell
+conda activate allrobotrl-platform
 cd frontend-prototype/react-app
 npm install --cache D:\npm-cache
 npm run dev -- --host 127.0.0.1

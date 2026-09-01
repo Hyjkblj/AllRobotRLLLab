@@ -4,6 +4,8 @@ channels:
   - conda-forge
 dependencies:
   - python=3.11
+  # React/Vite tooling is managed by Conda instead of the system Node.js.
+  - nodejs=20
   - pip
   - setuptools
   - wheel

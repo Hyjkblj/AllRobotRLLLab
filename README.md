@@ -14,6 +14,35 @@ python -m tools.robotlab init --mode local_file
 python -m tools.robotlab start --mode local_file
 ```
 
+The React/Vite toolchain is pinned to Node.js 20 in the same Conda environment;
+do not install Node.js through the system package manager.  On the server,
+initialize Conda before activation:
+
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
+conda activate allrobotrl-platform
+node --version
+npm --version
+```
+
+For an existing `allrobotrl-platform` environment, install the pinned runtime
+without recreating the environment:
+
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
+conda install -n allrobotrl-platform -c conda-forge nodejs=20 -y
+```
+
+Run the frontend from that environment:
+
+```bash
+source /ai/python/miniconda3/etc/profile.d/conda.sh
+conda activate allrobotrl-platform
+cd frontend-prototype/react-app
+npm ci
+npm run dev -- --host 127.0.0.1 --port 4173
+```
+
 API 地址：`http://127.0.0.1:8000/api/v1/health`。默认开发模式是无数据库的 Local File Mode，运行数据写入 `runtime/`，不需要 Docker、PostgreSQL、Redis 或 MinIO。需要团队共享或远程 worker 时，再显式使用 Compose Mode。详细边界、接口和后续 P1/P2 工作见 [docs/P0实现说明.md](docs/P0实现说明.md)、[docs/P2实现说明.md](docs/P2实现说明.md) 与方案文档。
 
 运维入口安装项目自身代码后可直接使用 `robotlab`（也可执行 `python -m tools.robotlab`）：
