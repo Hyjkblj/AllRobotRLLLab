@@ -6,6 +6,7 @@ __pycache__/
 frontend-prototype/react-app/dist/
 frontend-prototype/.runtime/
 .runtime/
+runtime/
 .env
 .env.*
 !.env.staging.example
@@ -15,3 +16,9 @@ frontend-prototype/.runtime/
 # versions and setup commands.
 third_party/*
 !third_party/README.md
+
+# Project runtime adapter source (the generated runtime/ data directory above
+# remains ignored).
+!backend/app/runtime/
+!backend/app/runtime/**
+backend/app/runtime/__pycache__/

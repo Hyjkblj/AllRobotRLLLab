@@ -158,4 +158,32 @@ MVP 只先验收 `ReachBox` 和 `HugBox`，避免从随机初始化直接训练�
 + 版本与产物 manifest
 ```
 
-第一阶段应把 G1 做成可复现、可验收、可导出的参考适配器，再把同一套接口扩展到其它人形机器人。
+第一阶段应让通用 RobotSpec 在 G1 上完成可复现、可验收、可导出的完整闭环，再把同一套接口扩展到其它具有关节的机器人。
+
+## 10. 项目形态修订（最新基线）
+
+后续交付物不再是必须连接云端的远程 Web 平台，而是完整部署到用户本地的机器人 RL 项目。用户通过统一命令启动本地服务，再使用浏览器访问 `localhost`；首期不制作 Electron/Tauri 桌面应用。
+
+统一入口为 `robotlab`：
+
+```text
+robotlab install              检查宿主机、WSL2、Docker、GPU 和联网前置条件
+robotlab init                 创建本地配置、数据目录、Compose 环境和项目工作区
+robotlab doctor               重新检查组件、版本、GPU、挂载和服务连通性
+robotlab start                启动本地 API、前端、PostgreSQL、Redis、MinIO 和 worker
+robotlab stop                 停止本地服务，不删除项目数据和产物
+robotlab status               查看服务、队列、GPU worker 和运行状态
+robotlab robot add --path ... 注册用户提供的机器人资产包
+robotlab robot list           查看已注册机器人及自检状态
+robotlab run --project ...    从冻结配置启动动作处理、训练或 sim2sim 作业
+robotlab logs <run_id>        查看结构化日志和阶段进度
+robotlab artifact export ...  导出策略包、manifest、报告和校验和
+```
+
+最新决策调整为：首期默认提供功能完整的 Local File Mode，不依赖 Docker、PostgreSQL、Redis 或 MinIO；Compose Mode 作为团队共享、远程 GPU、多用户和负载均衡的可选扩展。两种模式共享 API、数据契约、前端和产物格式。`install` 和 `doctor` 只检查并输出明确安装指引，不自动修改 Windows 驱动、WSL2、内核、Docker、NVIDIA 系统组件或 Conda 环境；用户手动安装缺失组件后再次运行 `doctor`。
+
+Windows 11 使用 WSL2 Ubuntu 22.04、Docker Desktop/WSL2 集成和 NVIDIA WSL CUDA；Linux 使用 Ubuntu 22.04、Docker Engine 和 NVIDIA Container Toolkit。两者都必须具备完整的训练、导出和 sim2sim 能力，所有 Linux 容器和仿真任务使用同一套 Compose 服务边界。允许联网下载依赖和模型，但必须记录来源、revision、许可证、大小和 SHA-256。
+
+首期默认本地单用户运行，不要求登录。单个用户可以提交多个训练、导出和 sim2sim 作业，由 `robotlabd` 根据实时 GPU 负载动态装箱或排队；每张 RTX 4090 默认最多 3 个训练作业。Local File Mode 使用不可变 manifest、原子状态文件、追加事件日志、内容寻址产物和本地 lease 文件实现恢复，不把“无数据库”做成功能缩水模式。项目、动作、配置、日志、checkpoint、策略包和报告保存于本地数据目录，同时保留远程 GPU、多用户、项目权限和负载均衡扩展点。
+
+机器人资产由用户提供并注册，平台不替用户下载或假定厂商资产。`robotlab robot add` 需要校验 URDF/MJCF/XML/USD、网格、关节、body、qpos/qvel、三侧资产声明、执行器/PD/动作缩放/控制周期/传动关系、许可证和 SHA-256，并生成不可变 `RobotSpec`。平台只生成 staging 和后端配置，不修改原始资产，也不静默推导缺失的关键控制参数。

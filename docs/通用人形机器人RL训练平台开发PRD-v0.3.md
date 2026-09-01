@@ -1102,3 +1102,387 @@ python frontend-prototype/mujoco_service.py
 当前仓库已经形成一条**可运行的 G1 动作预览与微调原型闭环**：用户可以选择动作源，读取真实 G1 MJCF/URDF，播放动作帧，选择关节并按限位调整角度，保存关键帧，导出 qpos，并在浏览器中使用真实 MuJoCo 离屏渲染结果进行视角交互。动作切换和渲染请求生命周期已经具备隔离规则。
 
 这条闭环证明了“React 前端 + MuJoCo Python Renderer + 后端动作服务”的实现可行性，但不等同于平台生产闭环已完成。正式上线仍必须完成 FastAPI、PostgreSQL、Redis/Celery、对象存储、权限审计、Isaac Lab 训练 worker、三种子 sim2sim 和 Linux 无头环境验证。后续开发应以本节完成度矩阵为基线推进，不把规划项重复当作已交付能力。
+
+## 19. Kimodo 独立 POC：生成式动作创作与 G1 模仿训练验证
+
+### 19.1 POC 定位
+
+Kimodo POC 是独立的动作生成能力验证，不改变 G1 首期主闭环的必选输入路径，也不把 Kimodo 作为 GVHMR、GMR、Isaac Lab、RSL-RL/PPO 或 sim2sim 的替代品。
+
+POC 的目标是验证：用户可以通过文本提示和运动学约束生成 G1 动作候选，平台可以把 Kimodo 输出可靠地转换为统一的 `TrainMotionNPZ`，在现有 MuJoCo 工作台中预览，并启动 G1 imitation smoke training。只有 POC 的实际质量指标达标后，才将 Kimodo 纳入正式技术方案的 P1 生成式动作创作模块。
+
+### 19.2 固定版本与运行边界
+
+POC 必须记录并锁定以下身份，禁止直接使用浮动 `main` 或未登记的模型缓存：
+
+| 项目 | POC 基线 |
+| --- | --- |
+| Kimodo 仓库 | `https://github.com/nv-tlabs/kimodo` |
+| Kimodo Git commit | `1aece8c124d73d255ceff5086d983b844c9f4e94`（POC 创建时重新确认） |
+| G1 模型 | `Kimodo-G1-RP-v1` |
+| 模型来源 | Hugging Face `nvidia/Kimodo-G1-RP-v1` |
+| 模型 revision | 执行前固定具体 commit/revision，并写入 manifest |
+| 文本编码器 | `meta-llama/Meta-Llama-3-8B-Instruct`，记录 revision 和访问许可 |
+| Kimodo Python | 3.10 独立环境或 Docker 容器 |
+| PyTorch/CUDA | 使用 Kimodo worker 的锁定镜像版本，不安装到 Isaac Lab 环境 |
+| G1 训练 | 现有 Isaac Lab + RSL-RL/PPO smoke task |
+| 预览 | 当前 Python MuJoCo 离屏 PNG 服务 |
+
+Kimodo worker 必须与 GVHMR、GMR 和 Isaac Lab 隔离。Kimodo 官方说明完整 GPU 生成约需要 17 GB VRAM；POC 默认将文本编码器放在 CPU，并将生成任务放入独立 `motion-generation-gpu` 队列。POC 阶段一张 RTX 4090 同时只运行一个 Kimodo 生成进程，不与 Isaac Sim 或高显存导出任务共卡。
+
+Kimodo 代码采用 Apache-2.0，但模型 checkpoint、文本编码器、训练数据和 SMPL/SOMA 资产使用独立许可证。未完成许可证和模型 revision 登记时，生成结果只能用于内部 POC，不能进入可下载策略包。
+
+### 19.3 五类固定动作
+
+POC 使用固定文本和约束样例，不接受“只生成看起来好的动作”作为验收依据。五类样例覆盖不同运动结构：
+
+| 编号 | 动作类别 | 生成要求 | 重点检查 |
+| --- | --- | --- | --- |
+| K1 | 向前行走并停止 | 文本提示，包含起步、持续行走和停止 | 根轨迹、脚接触、停止过渡 |
+| K2 | 原地转身/侧向移动 | 文本提示 + 2D 根路径或路点 | 根朝向、路径跟随、左右脚协调 |
+| K3 | 下蹲后站起 | 文本提示 + 全身关键帧 | 根高度、膝关节限位、躯干稳定 |
+| K4 | 抬手挥手 | 文本提示 + 手部末端约束 | 肩/肘/腕限位、手部轨迹 |
+| K5 | 向前伸手并收回 | 文本提示 + 右手位置/旋转约束 | 末端约束、躯干补偿、动作连续性 |
+
+每个样例默认生成 3 个候选、固定随机种子集合和 3～8 秒动作片段。Kimodo 单个 prompt 的最大生成时长、约束数量和 G1 后处理限制必须遵循其官方文档；超过限制时，POC 应拆分时间线或明确记录为不支持，而不是静默扩大范围。
+
+### 19.4 POC 处理链路
+
+```text
+固定 prompt/constraints.json/seed
+  → Kimodo-G1 生成多个候选
+  → 保存 Kimodo NPZ 与 G1 MuJoCo CSV
+  → KimodoG1Adapter 识别并转换
+  → 坐标系、四元数、rest pose、qpos 顺序统一
+  → G1 29 DoF 限位和速度检查
+  → 计算 body_pos_w/body_quat_w/vel 等字段
+  → 生成 TrainMotionNPZ
+  → 当前 MuJoCo 服务逐帧预览和 PNG 检查
+  → G1 imitation smoke training
+  → checkpoint、策略输出 shape 和训练指标检查
+```
+
+#### 19.4.1 KimodoG1Adapter
+
+适配器必须独立实现，不得把 Kimodo 格式判断散落到通用 Motion Compiler：
+
+- 读取 Kimodo NPZ：`posed_joints`、`global_rot_mats`、`local_rot_mats`、`foot_contacts`、`root_positions`、`global_root_heading`；
+- 读取 Kimodo G1 CSV：每帧 36 列，即根平移 3、根四元数 4、G1 29 个关节角；
+- 校验 Kimodo G1 的 `wxyz` 根四元数，并转换为平台对外契约要求的 `xyzw`；
+- 校验 Kimodo 使用的 y-up/+z-forward 与 MuJoCo z-up/+x-forward 坐标转换；
+- 校验 34-joint Kimodo skeleton 到 G1 29 DoF 的映射；
+- 使用平台锁定的 G1 XML 重新计算 qpos/body 状态，不能直接信任用户上传的 qpos；
+- 输出标准 `RetargetMotion` 和 `TrainMotionNPZ`，保留 `source_format=kimodo_npz|kimodo_g1_csv`、转换器版本和输入 hash。
+
+Kimodo 自带 G1 XML、GMR 的 `g1_mocap_29dof.xml` 和 Unitree MuJoCo XML 必须逐项比较 `joint_names`、qpos 地址、关节轴、限位、`qpos0`、根高度和控制坐标系。任何差异必须阻断转换并给出字段级错误，不允许以列号相同为由继续训练。
+
+#### 19.4.2 统一训练文件
+
+POC 生成的 `TrainMotionNPZ` 至少包含：
+
+```text
+fps
+joint_pos           float32[T, 29]
+joint_vel           float32[T, 29]
+body_pos_w          float32[T, B, 3]
+body_quat_w         float32[T, B, 4]
+body_lin_vel_w      float32[T, B, 3]
+body_ang_vel_w      float32[T, B, 3]
+```
+
+同时保存 `robot_id`、`joint_names`、`body_names`、`coord_frame`、`quat_convention`、`source_motion_sha256`、`kimodo_model_revision` 和 `converter_version`。POC 不得直接把 Kimodo 自定义 NPZ 送入训练，必须经过统一编译和质量门禁。
+
+### 19.5 POC 质量指标与验收门槛
+
+每个动作、每个候选和每个转换阶段都要记录指标。POC 结论分为 `GO_P1`、`CONDITIONAL_GO`、`NO_GO`，不能只依据主观观感。
+
+#### 19.5.1 硬门槛
+
+以下任意一项失败，POC 不得进入 `GO_P1`：
+
+1. 5 类动作均能生成 Kimodo NPZ 和 G1 CSV，或明确记录官方限制导致的可解释失败。
+2. 合法输出 100% 通过文件读取、shape、dtype、finite 值和四元数归一化检查。
+3. G1 CSV 每帧必须为 36 列，`joint_pos` 最终必须为 `[T, 29]`，不能丢失或静默补齐关节。
+4. Kimodo → 平台格式 → MuJoCo qpos 往返转换的根位置、根姿态和关节角误差均不超过 `1e-4`（浮点容差内）。
+5. 使用平台 G1 XML 进行 `mj_forward` 后，不得出现 NaN/Inf；地面穿透和非法根高度必须被阻断或明确告警。
+6. 5 类动作均可被当前 MuJoCo 预览服务加载并生成连续帧 PNG，不能只生成静态首帧。
+7. 训练配置、Kimodo 版本、模型 revision、输入 hash、输出 hash 和许可证状态全部写入 manifest。
+
+#### 19.5.2 质量指标
+
+每个候选至少记录：
+
+- 关节限位违反比例；
+- 关节速度/加速度峰值及超限比例；
+- 根高度最小值、根姿态范围和根轨迹长度；
+- 左右脚接触期间的平均滑动速度；
+- 末端约束位置/旋转误差（K4/K5）；
+- 相邻帧姿态跳变和最大 jerk；
+- 预览帧成功率和平均渲染耗时；
+- 候选之间的动作相似度和多样性；
+- smoke training 的初始/最终回报、episode length、跌倒率、动作饱和率、NaN 次数和 checkpoint 生成情况。
+
+建议的默认告警阈值：关节限位违反比例 `0`；四元数范数误差 `≤1e-3`；根高度低于安全高度的帧占比 `≤5%`；接触期间足端平均滑动速度 `≤0.15 m/s`；末端位置误差 `≤0.10 m`；smoke training 中 NaN/Inf `=0`。这些是 POC 默认值，最终发布验收仍以正式 sim2sim 阈值为准。
+
+#### 19.5.3 训练 smoke gate
+
+每个动作至少选一个通过质量门禁的候选，使用固定 seed 和缩短后的 G1 `g1_mimic` 训练配置运行 smoke training。smoke training 的目标是验证接口和数值链路，不代表策略已经达到正式发布质量。
+
+`GO_P1` 的建议条件：
+
+- 5/5 动作完成转换和 MuJoCo 预览；
+- 至少 4/5 动作完成 smoke training，进程正常退出且生成 checkpoint；
+- 5/5 动作的策略输出 shape 正确，动作维度为 29，推理无 NaN/Inf；
+- 没有未解释的坐标系、qpos 顺序、根四元数或 G1 限位错误；
+- 生成时间、显存峰值、磁盘占用和训练耗时均能被调度器记录；
+- 至少 2 名内部用户能够在不阅读 Kimodo CLI 文档的情况下完成“输入 prompt → 选择候选 → 预览 → 送入训练”流程。
+
+如果只有 3/5 动作通过，但失败集中于已知的 Kimodo 动作覆盖限制、约束冲突或 G1 后处理缺陷，可以进入 `CONDITIONAL_GO`，前提是缺陷分类、规避提示和产品范围已写入 P1 设计；如果存在未定位的格式、坐标或训练数值错误，则为 `NO_GO`。
+
+### 19.6 POC 产物
+
+每次 POC 运行必须产生可复现的目录和 manifest：
+
+```text
+kimodo-poc/{poc_run_id}/
+  prompts/
+    K1.json ... K5.json
+  generated/
+    K1/{candidate_00,candidate_01,candidate_02}/
+    K2/{candidate_00,candidate_01,candidate_02}/
+    ...
+  converted/
+    kimodo_motion.npz
+    g1_qpos.csv
+    train_motion.npz
+  preview/
+    frame_*.png
+    preview.mp4
+  training/
+    config.json
+    metrics.jsonl
+    checkpoint/
+  reports/
+    quality_report.json
+    quality_report.html
+  manifest.json
+  checksums.sha256
+```
+
+`manifest.json` 至少记录 Kimodo commit、模型和文本编码器 revision、输入 prompt/constraints hash、seed、候选数量、diffusion steps、输出文件 hash、转换器版本、G1 XML hash、MuJoCo 版本、GPU UUID、显存峰值、训练配置和许可证状态。
+
+### 19.7 进入正式 P1 的实现要求
+
+只有 POC 达到 `GO_P1` 或经评审批准的 `CONDITIONAL_GO`，才执行以下正式集成：
+
+1. 在 `MotionSourceAdapter` 中注册 `KimodoMotionSourceAdapter`，不修改视频和直接动作已有路径。
+2. 在后端增加 `motion-generation-gpu` 队列、GPU lease 和生成任务状态。
+3. 在 React 动作资源入口增加“文本生成/约束生成”，复用现有动作预览和 Motion Compiler 页面。
+4. 将 Kimodo 生成结果登记为不可变 `AssetVersion`，支持候选比较、用户选择和版本复制。
+5. 将 Kimodo 模型/文本编码器许可证和 revision 纳入 Run Manifest、下载页和审计事件。
+6. 为 KimodoG1Adapter 增加 contract test、round-trip test、G1 XML 对齐测试和回归动作 fixture。
+7. 对 Kimodo G1 输出质量单独统计，不把生成模型指标与 RL 训练指标混为一个“成功率”。
+
+POC 阶段不建设浏览器内 MuJoCo WASM/WebGL viewer，也不将 Kimodo Gradio/Viser Demo 直接嵌入生产前端。生产平台只复用 Kimodo 的推理接口、约束格式和可验证输出，统一由现有 React 工作台、后端 MuJoCo 渲染服务和作业编排系统承载用户体验。
+
+## 20. 本轮正式修订：本地完整项目交付形态
+
+本节记录 Kimodo POC 之后确认的产品形态和实现边界。若本节与本文前面仍保留的历史 Web 平台描述冲突，以本节为开发执行基线；历史内容仅保留为需求演进记录，不得作为新实现依据。
+
+### 20.1 产品形态
+
+交付物不是远程 Web 平台，也不是必须连接云端才能使用的 SaaS，而是一个可以完整部署到用户本地的机器人 RL 训练项目。用户通过封装好的命令完成安装、初始化、启动、检查、运行和停止；启动后使用本机浏览器访问本地服务，例如 `http://localhost:<port>`。首期不制作 Electron/Tauri 桌面应用。
+
+本地项目必须保留清晰的代码工作区和运行工作区：
+
+```text
+robotlab/
+  apps/                 # 本地 API 和 React 工作台
+  packages/             # 版本化契约、通用组件和 CLI 公共库
+  adapters/             # 通用关节机器人适配层与具体机器人实例
+  workers/              # motion、Isaac、sim2sim 等执行镜像/启动器
+  infra/                # Docker Compose、数据库、队列和对象存储
+  runtime/              # 用户本地运行数据，不提交到源码仓库
+  assets/               # 用户注册的机器人资产索引，不复制原始资产
+  projects/             # 项目、动作、配置、日志和产物索引
+```
+
+代码必须分模块、分层、低耦合。前端、API、领域契约、作业编排、机器人适配器、仿真 worker 和基础设施不得互相越层调用；所有跨进程任务通过版本化 manifest 和结构化产物连接。
+
+### 20.2 统一命令行入口
+
+首期提供统一命令 `robotlab`，命令行为必须稳定、可脚本化，并在 Windows WSL2 Ubuntu 22.04 与原生 Linux Ubuntu 22.04 使用同一套 Linux 运行时。
+
+```text
+robotlab install              检查宿主机、WSL2、Docker、GPU 和联网前置条件
+robotlab init                 创建本地配置、数据目录、运行 profile 和项目工作区
+robotlab doctor               重新检查当前 profile 的组件、版本、GPU、挂载和服务连通性
+robotlab start                启动本地 API、前端、scheduler 和 worker；Compose profile 另启数据库服务
+robotlab stop                 停止本地服务，不删除项目数据和产物
+robotlab status               查看服务、队列、GPU worker 和运行状态
+robotlab robot add --path ... 注册用户提供的机器人资产包
+robotlab robot list           查看已注册机器人及自检状态
+robotlab run --project ...    从冻结配置启动动作处理、训练或 sim2sim 作业
+robotlab logs <run_id>        查看结构化日志和阶段进度
+robotlab artifact export ...  导出策略包、manifest、报告和校验和
+```
+
+`install` 和 `doctor` 只检查并输出明确的安装指引，不自动修改 Windows 驱动、WSL2、内核、Docker、NVIDIA 系统组件或 Conda 环境。Local File Mode 不检查 PostgreSQL、Redis、MinIO 和 Docker；Compose Mode 才检查这些服务。缺少组件时必须返回稳定错误码、检测到的版本、要求版本、官方安装地址和下一步命令；用户手动安装后再次运行 `doctor`。
+
+### 20.3 Local File 与 Compose 运行环境
+
+首期默认提供功能完整的 `Local File Mode`，面向单机单用户和多个并发训练作业，不依赖 Docker、PostgreSQL、Redis 或 MinIO。`robotlabd` 作为唯一调度状态写入者，使用不可变 manifest、原子状态文件、追加事件日志、内容寻址产物、本地进程锁和 GPU lease 文件完成持久化、恢复和动态装箱。
+
+`Compose Mode` 作为可选扩展，使用 PostgreSQL、Redis/Celery 和 MinIO，面向团队共享、远程 GPU、多用户和负载均衡。两种模式必须共享 API、RobotSpec、Run Manifest、PolicyBundle、Sim2SimReport 和前端工作流；Local File Mode 不能是功能缩水的演示模式。
+
+Windows 支持要求：
+
+1. Windows 11 主机安装 WSL2、Ubuntu 22.04 和 NVIDIA WSL CUDA 支持；选择 Compose Mode 时再安装 Docker Desktop/WSL2 集成。
+2. Local File Mode 的 Isaac Lab、MuJoCo、训练和 sim2sim 任务统一在 WSL2 Ubuntu 22.04 内执行；Compose Mode 额外通过 Linux 容器执行。
+3. Windows 本机只作为入口和浏览器宿主；代码挂载、GPU 映射、模型缓存和训练数据必须经过 WSL2 路径验证。
+
+Linux 支持要求：
+
+1. 使用 Ubuntu 22.04 和 NVIDIA 驱动；选择 Compose Mode 时再安装 Docker Engine 和 NVIDIA Container Toolkit。
+2. Local File Mode 使用本地 Conda/虚拟环境与 scheduler；Compose Mode 使用与 WSL2 相同的 Compose 配置和环境变量契约。
+
+允许联网下载依赖和模型，但下载内容必须记录来源 URL、版本/revision、许可证、文件大小和 SHA-256。安装器不得把未经登记的浮动模型缓存直接用于训练或发布。
+
+### 20.4 本地单用户模式与未来扩展
+
+首期默认本地单用户运行，不要求登录，不建设登录页、用户注册或远程账号体系。单个用户可以提交多个训练、导出和 sim2sim 作业，由本地 scheduler 根据实时 GPU 显存、利用率、CPU、温度和健康状态并发装箱或排队。项目、动作、配置、日志、checkpoint、策略包和报告全部保存在用户本地数据目录。
+
+但内部接口仍需保留未来多用户和负载均衡扩展点：项目 ID、资源租约、作业队列、GPU worker 注册、审计事件和对象权限不能写成单例全局变量。后续接入远程 GPU 或团队共享服务器时，不改变训练和产物契约。
+
+Local File Mode 的多作业并发必须满足：每个 Run 独立目录和锁；`state.json` 原子替换；`events.jsonl`/`metrics.jsonl` 使用单调序号；scheduler 是唯一状态写入者；机器或 scheduler 重启后根据 PID、心跳、lease 和最后事件恢复。首期每张 RTX 4090 默认最多 3 个训练作业，超出显存或利用率阈值时新作业排队，不驱逐已运行作业。项目列表和统计索引必须可从 manifest、state 和 artifacts 重建。
+
+### 20.5 机器人资产由用户提供
+
+平台不替用户下载或假定某个厂家的完整机器人资产。用户必须提供并注册机器人资产包，例如：
+
+```bash
+robotlab robot add --path /data/robots/<robot_asset_package>
+```
+
+注册过程必须生成不可变版本和 `RobotSpec`，并完成：
+
+- URDF/MJCF/XML/USD 文件存在性、可解析性和许可证检查；
+- 网格引用、相对路径、纹理和碰撞资源检查；
+- 关节、DoF、body、qpos/qvel 地址和轴向检查；
+- Isaac 资产、Motion/GMR 资产和 MuJoCo sim2sim 资产的分侧声明；
+- 关节映射、初始状态、位置/速度/力矩限位检查；
+- 执行器、PD、动作缩放、控制周期和传动关系检查；
+- 资产及派生配置 SHA-256、来源、版本和许可证登记。
+
+平台只生成经过校验的 staging 目录和后端配置，不修改用户原始资产，也不从 URDF/MJCF 静默推导缺失的关键控制参数。缺少关键字段时必须返回字段级失败原因。
+
+## 21. 通用关节机器人基础范式
+
+### 21.1 设计原则
+
+基础范式面向具有关节的机器人，包括人形、四足、机械臂等；不把 G1 的 29 DoF、关节命名、Unitree SDK 顺序或执行器分组写入通用核心。G1 是第一个完整闭环验证实例，必须通过该通用范式注册后才能进入实验。
+
+通用事实源是 `RobotSpec`：
+
+```text
+RobotSpec
+  ├─ robot identity and assets
+  ├─ joints and bodies
+  ├─ actuators and control modes
+  ├─ transmissions and coupling
+  ├─ limits, initial state and timing
+  ├─ Motion/GMR mapping
+  ├─ Isaac backend declaration
+  ├─ MuJoCo sim2sim declaration
+  └─ version, license and checksums
+```
+
+用户录入字段与平台派生字段必须分开保存。用户录入资产 URI、关节/执行器/传动参数、控制周期和初始状态；平台派生动作维度、qpos 地址、Isaac 配置、MuJoCo actuator 配置、归一化/动作变换、质量报告和 manifest hash。
+
+### 21.2 关节、执行器和传动
+
+每个关节需要稳定逻辑 ID，并明确 `policy_index`、`sim_name`、`deployment_name`、类型、轴向、位置/速度/力矩限制、零位、方向和执行器关联。每个执行器需要明确控制模式、命令空间、参考侧、PD/阻抗参数、力矩/速度限制、惯量、摩擦、减速比、效率、方向和动作缩放。
+
+首期必须支持市面主流绑定方式：
+
+- 一执行器对应一关节：直驱或减速器关节；
+- 一执行器驱动多个关节：连杆、腱绳或共享传动；
+- 多执行器驱动一个关节：并联或冗余驱动；
+- 差动/并联传动：通过显式映射矩阵定义；
+- mimic 主从关节；
+- 串联弹性执行器：首期使用等效阻抗模型，预留弹簧刚度、阻尼、延迟和 backlash 字段。
+
+首期只覆盖训练和 sim2sim 所需的等效关节执行器模型，不覆盖厂商 CAN、EtherCAT、DDS、电流环和真实硬件安全控制器。典型位置控制模型为：
+
+```text
+tau = clamp(kp * (q_target - q) + kd * (qd_target - qd) + tau_ff,
+            -effort_limit, effort_limit)
+```
+
+减速器和传动必须显式记录参考侧和换算方向；平台不得将“电机一关节”的假设写死。
+
+### 21.3 适配器和扩展规则
+
+通用核心只依赖稳定接口：
+
+```python
+class RobotAdapter(Protocol):
+    def get_spec(self) -> RobotSpec: ...
+    def validate_assets(self) -> ValidationResult: ...
+    def compile_backend_configs(self, spec: RobotSpec, out_dir: Path) -> CompilationResult: ...
+    def validate_motion(self, motion: RetargetMotion) -> ValidationResult: ...
+
+class Sim2SimAdapter(Protocol):
+    def validate_bundle(self, bundle: PolicyBundle) -> ValidationResult: ...
+    def evaluate(self, bundle: PolicyBundle, seed: int, out_dir: Path) -> EvaluationResult: ...
+```
+
+新增机器人只能新增 `RobotSpec` 实例、资产 lock、joint/body/actuator/transmission mapping、Motion/GMR 映射、Isaac task 注册、sim2sim adapter 和 contract/integration tests，不得在通用流程中添加 `if robot == ...` 分支。G1 的 Unitree MuJoCo 控制器属于 G1 adapter，不属于通用 RobotSpec。
+
+## 22. G1 首个完整闭环验证顺序
+
+第一阶段只要求 G1 完成以下闭环：
+
+```text
+用户提供/注册 G1 资产
+  → RobotSpec 和三侧资产自检
+  → 视频 GVHMR/GMR 或直接动作格式识别
+  → RetargetMotion / TrainMotionNPZ
+  → MuJoCo 离屏预览和质量报告
+  → Isaac Lab + RSL-RL/PPO imitation training
+  → play / JIT(TorchScript) / ONNX export
+  → Unitree MuJoCo sim2sim 三固定种子
+  → manifest、报告、校验和、策略包
+```
+
+只有上述 G1 闭环稳定后，才实现第二个及更多机器人的完整范式工作流。跨机器人动作映射不作为 G1 首期验收项，但通用 `SourceMotionDescriptor`、`RetargetMotion` 和 `RobotAdapter` 接口必须预留端口。
+
+## 23. 任意人体动作与训练参数边界
+
+平台不按动作语义限制用户。站立、挥手、深蹲、行走、转身或其他人体动作，只要满足输入格式、数值、可见度、运动学和目标机器人资产契约，都必须进入同一动作转换和 imitation pipeline。输入不合格时给出可定位的失败原因，不得静默丢帧、补零或改写原始动作。
+
+首期对用户开放完整的 PPO、观测、奖励和控制参数配置，但配置只能引用平台注册的 schema、奖励项和安全终止项。用户不能上传 Python、shell、环境或奖励代码；`fall`、`joint_limit`、`nan_inf`、控制周期和执行器硬限位等安全项不能被关闭。平台必须记录用户覆盖值、派生值、版本和最终冻结的 Run Manifest。
+
+## 24. GPU 调度和并行训练
+
+训练作业声明资源需求，调度器根据实时 GPU 指标动态装箱。首期默认每张 RTX 4090 最多接纳 3 个训练作业；当显存、GPU 利用率、CPU、温度或 worker 健康指标超过阈值时，停止接纳新作业。Isaac Sim、导出和 sim2sim 等高显存任务可以声明独占 GPU。
+
+每个 job 必须记录：GPU UUID、显存预算、实际峰值、利用率、并发槽位、容器版本、开始/结束时间和失败原因。OOM、worker 失联或超时只能结束当前 attempt，不得污染其他作业或覆盖历史产物。
+
+## 25. 预览和权威验收
+
+浏览器内 MuJoCo WASM/WebGL viewer 延后到训练和 sim2sim 闭环稳定后实现。首期采用双层预览设计中的后端层：
+
+- 后端 MuJoCo 离屏渲染生成权威 PNG、视频和验收报告；
+- 前端浏览器只负责时间轴、关节编辑、关键帧和结果展示；
+- 后续增加 WASM/WebGL 快速预览时，复用相同的 `TrainMotionNPZ`、RobotSpec 和渲染协议，不改变训练事实源。
+
+## 26. 本轮修订后的交付优先级
+
+1. 本地 Docker Compose 项目骨架、`robotlab install/init/doctor/start/stop/run` 和 WSL2/Linux 检查。
+2. 通用 `RobotSpec v1`、资产注册、自检、staging、版本和 hash；用 G1 完成首个实例。
+3. G1 两类输入路径、Motion Compiler、MuJoCo 预览、Isaac Lab/RSL-RL/PPO smoke training。
+4. JIT/TorchScript、ONNX、归一化参数、动作缩放、PD/控制参数、manifest、校验和及三种子 sim2sim 报告。
+5. Kimodo 独立 POC；达到质量门槛后再进入 P1。
+6. G1 闭环稳定后，按通用 RobotSpec 接入第二个及更多具有关节的机器人。
+7. 最后增加用户自定义任务语义和浏览器 MuJoCo WASM/WebGL viewer。

@@ -28,6 +28,7 @@ import {
   X
 } from "lucide-react";
 import "./styles.css";
+import PlatformWorkbench from "./features/platform/PlatformWorkbench.jsx";
 
 const API = "/api/mujoco";
 
@@ -426,6 +427,7 @@ function Badge({ children, tone = "neutral" }) {
 }
 
 function App() {
+  const [workspace, setWorkspace] = useState("platform");
   const [health, setHealth] = useState(null);
   const [model, setModel] = useState(null);
   const [urdf, setUrdf] = useState(null);
@@ -504,7 +506,7 @@ function App() {
     }
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { if (workspace === "editor") refresh(); }, [workspace]);
   useEffect(() => { if (selectedId && selectedAsset?.frameCount > 0) loadFrame(selectedId, frame); }, [selectedId, frame]);
   useEffect(() => () => frameRequestRef.current?.abort(), []);
   useEffect(() => {
@@ -614,13 +616,17 @@ function App() {
 
   const selectedKeyframes = keyframes.filter((item) => item.assetId === selectedId);
 
+  if (workspace === "platform") {
+    return <PlatformWorkbench onOpenEditor={() => setWorkspace("editor")} />;
+  }
+
   return <div className="app-shell">
     <aside className="rail">
       <div className="brand-mark">ML</div>
       <div className="rail-line" />
       <button className="rail-button active" title="动作编辑"><Waypoints size={18} /></button>
-      <button className="rail-button" title="模型资产"><Layers3 size={18} /></button>
-      <button className="rail-button" title="训练任务"><Activity size={18} /></button>
+      <button className="rail-button" title="平台工作台" onClick={() => setWorkspace("platform")}><Layers3 size={18} /></button>
+      <button className="rail-button" title="训练任务" onClick={() => setWorkspace("platform")}><Activity size={18} /></button>
       <div className="rail-spacer" />
       <button className="rail-button" title="设置"><Settings2 size={18} /></button>
       <div className="rail-user">HY</div>

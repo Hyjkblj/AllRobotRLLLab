@@ -12,8 +12,14 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
+try:
+    # Keep PostgreSQL an optional runtime dependency.  Local File Mode imports
+    # this module through the API route wiring but never opens a connection.
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal installs
+    dict_row = None
+    Jsonb = None
 
 from backend.app.domain.contracts import (
     AssetRecord,
@@ -161,6 +167,11 @@ class PostgresRunRepository(_Repository):
             row = cursor.fetchone()
         return _run(row) if row else None
 
+    def list_for_project(self, project_id: str) -> list[RunRecord]:
+        with self.connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute("select r.*, u.external_id as created_by_external_id from runs r join users u on u.id=r.created_by where r.project_id=%s order by r.updated_at desc", (_uuid(project_id),))
+            return [_run(row) for row in cursor.fetchall()]
+
     def update(self, run: RunRecord) -> RunRecord:
         with self.connection.cursor() as cursor:
             cursor.execute("update runs set status=%s,parent_run_id=%s,created_by=%s,current_attempt_id=%s,manifest_json=%s,manifest_sha256=%s,updated_at=%s where id=%s", (run.status.value, _uuid(run.parent_run_id) if run.parent_run_id else None, self._user_uuid(run.created_by), _uuid(run.current_attempt_id), Jsonb(run.manifest.model_dump(mode="json")), run.manifest.manifest_sha256, run.updated_at, _uuid(run.run_id)))
@@ -281,6 +292,11 @@ class PostgresAssetRepository(_Repository):
             row = cursor.fetchone()
         return _asset(row) if row else None
 
+    def list_for_project(self, project_id: str) -> list[AssetRecord]:
+        with self.connection.cursor(row_factory=dict_row) as cursor:
+            cursor.execute("select a.*,u.external_id as created_by_external_id from assets a join users u on u.id=a.created_by where a.project_id=%s order by a.created_at desc", (_uuid(project_id),))
+            return [_asset(row) for row in cursor.fetchall()]
+
     def version(self, asset_version_id: str) -> AssetVersion | None:
         try:
             version_uuid = _uuid(asset_version_id)
@@ -390,7 +406,10 @@ class PostgresUnitOfWork:
         self.connection = None
 
     def __enter__(self) -> "PostgresUnitOfWork":
-        import psycopg
+        try:
+            import psycopg
+        except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
+            raise RuntimeError("PostgreSQL mode requires psycopg; install the project's infra extra") from exc
 
         self.connection = psycopg.connect(self.dsn)
         self.projects = PostgresProjectRepository(self.connection)

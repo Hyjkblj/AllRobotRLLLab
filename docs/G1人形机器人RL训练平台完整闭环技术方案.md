@@ -1,15 +1,17 @@
-# G1 人形机器人 RL 训练平台完整闭环技术方案
+# 通用关节机器人 RL 训练平台完整闭环技术方案
 
 | 项目 | 决策 |
 | --- | --- |
 | 文档状态 | 开发执行基线 |
+| 基础范式 | 面向具有关节的机器人；G1 是首个完整验证实例，不是范式本身 |
 | 首期范围 | Unitree G1 29 DoF，通用人体动作模仿训练 |
 | 首期终点 | Isaac Lab 训练、策略双格式导出、MuJoCo sim2sim 三种子验收 |
-| 本地环境 | Windows 11：前端、FastAPI、契约和编排开发 |
-| 正式运行环境 | Ubuntu 22.04，双 RTX 4090：GVHMR、GMR、Isaac Lab/Isaac Sim、MuJoCo sim2sim |
-| 主要技术栈 | React + TypeScript + Vite；FastAPI + Pydantic v2；PostgreSQL 16；Redis 7 + Celery；MinIO/S3 |
+| 本地运行形态 | 完整项目部署到用户本地；本机浏览器访问 `localhost`，不依赖云端 SaaS |
+| Windows 运行基线 | Windows 11 + WSL2 + Ubuntu 22.04 + Docker Desktop/WSL2 集成 + NVIDIA WSL CUDA |
+| Linux 运行基线 | Ubuntu 22.04 + Docker Engine + NVIDIA Container Toolkit；具备与 Windows 相同的训练能力 |
+| 主要技术栈 | `robotlab` CLI；React + TypeScript + Vite；FastAPI + Pydantic v2；本地文件存储/进程调度（默认），PostgreSQL + Redis + MinIO（可选 Compose 扩展） |
 | 训练基线 | Isaac Lab v2.3.0 + Isaac Sim 5.1.0.0 + RSL-RL/PPO |
-| 适配器基线 | G1 29 DoF，GMR/GVHMR 与 Unitree MuJoCo |
+| 适配器基线 | 通用关节机器人 RobotSpec；G1 适配器、GMR/GVHMR 与 Unitree MuJoCo 为首个实例 |
 | 后续方向 | 多机器人适配器、用户自定义任务语义、浏览器 MuJoCo WASM/WebGL viewer |
 
 本文件是对以下资料和本次需求确认的工程化收敛，不替代原 PRD 中的背景说明：
@@ -35,13 +37,21 @@
 8. 双 RTX 4090 支持并行训练。调度器采用资源声明和动态装箱，首期每张卡默认最多 3 个训练作业；显存、利用率或 CPU 达到阈值时停止接纳新作业。
 9. 首期预览仍采用后端 MuJoCo 离屏渲染 PNG。训练和 sim2sim 稳定后再增加浏览器 MuJoCo WASM/WebGL viewer。
 10. 首期不包含真实 G1 上机、DDS 实机控制和安全联调，最终验收终点是 sim2sim。
-11. 首期面向单个团队内部使用，使用简单登录和项目级权限；数据模型、GPU lease、审计、队列和 API 保留多用户与负载均衡扩展点。
+11. 首期面向单个团队内部使用，默认本地单用户且不要求登录；数据模型、GPU lease、审计、队列和 API 保留未来多用户与负载均衡扩展点。
+12. `RobotSpec` 必须与具体厂家、型号和 DoF 数量解耦。G1 只能作为 `RobotSpec` 的一个实例，通过适配器注册进入实验。
+13. 机器人资产、关节参数、执行器参数和传动关系由用户录入；平台负责 schema 校验、资产 staging、版本化、派生后端配置和能力自检，不从 URDF/MJCF 静默猜测关键控制参数。
+14. 首期基础范式支持主流关节绑定方式：独立关节执行器、同一执行器驱动多个关节、多个执行器驱动一个关节、差动/并联传动、腱绳/连杆等效传动、mimic 关节和串联弹性执行器的等效阻抗模型。厂商 CAN/EtherCAT/DDS 通信协议不属于首期范围。
+15. 交付物是完整的本地项目，不是必须连接云端的远程 Web 平台；用户通过封装好的 `robotlab` 命令完成安装、初始化、检查、启动、运行、停止和产物导出。
+16. Windows 和 Linux 都必须具备完整训练能力。Windows 的 Linux 运行时统一放在 WSL2 Ubuntu 22.04 内；Linux 使用同一套 Docker Compose 服务边界和契约。
+17. 首期默认提供单用户 `Local File Mode`：不依赖 Docker、PostgreSQL、Redis 或 MinIO；同时保留 `Compose Mode` 作为团队共享、远程 GPU 和多用户扩展。两种模式共享 API、契约和产物格式，不能把 Local File Mode 实现成仅能跑通的演示版。
+18. 首期默认本地单用户运行，不要求登录；单个用户可以提交多个训练/导出/sim2sim 作业，由本地调度器按实时 GPU 负载并发装箱或排队；项目、动作、配置、日志、checkpoint、策略包和报告保存在本地数据目录，同时保留远程 GPU、多用户和负载均衡扩展点。
+19. 机器人资产必须由用户提供并通过 `robotlab robot add --path ...` 注册；平台不替用户下载或假定厂商资产，只负责校验、版本化、staging 和配置生成。
 
 ## 1. 目标、边界与成功定义
 
 ### 1.1 首期目标
 
-用户在网页中创建项目，选择 G1，提供视频或动作文件，完成动作转换和质量检查，调整动作及完整训练参数，启动一组异步 RL 作业，查看日志和指标，导出策略，并在 Unitree MuJoCo 中用至少三个随机种子完成 sim2sim。所有输入、配置、命令、版本、指标和产物可追溯、可复现、可下载。
+用户在本地执行 `robotlab start`，通过浏览器访问 `localhost`，创建项目并选择已注册机器人（首期为 G1），提供视频或动作文件，完成动作转换和质量检查，调整动作及完整训练参数，启动本地异步 RL 作业，查看日志和指标，导出策略，并在 Unitree MuJoCo 中用至少三个随机种子完成 sim2sim。所有输入、配置、命令、版本、指标和产物可追溯、可复现、可下载。
 
 首期不限制动作内容。动作可以是站立、挥手、深蹲、行走、转身或其他人体动作，只要人体估计/姿态文件和目标 G1 运动学约束满足契约。箱体搬运保留为后续任务语义示例，不作为通用 imitation pipeline 的硬编码分支。
 
@@ -68,7 +78,7 @@
 ## 2. 端到端业务流程
 
 ```text
-创建项目/登录
+robotlab start → 浏览器访问 localhost → 创建本地项目
   → 选择 Unitree G1 29 DoF
   → 上传视频或动作文件
   → 对象存储完成 + SHA-256/MIME/许可证校验
@@ -79,7 +89,7 @@
   → 后端 MuJoCo PNG 预览、时间轴、关节编辑、关键帧和质量告警
   → 保存 MotionEditConfig，重新编译为新版本
   → 用户选择完整 PPO/观测/奖励/控制配置
-  → 服务器校验所有配置并冻结 Run Manifest
+  → 本地 API 校验所有配置并冻结 Run Manifest
   → 动态 GPU 调度
   → Isaac Lab + Isaac Sim + RSL-RL/PPO 训练
   → play、export：JIT + ONNX + deploy/env/agent 参数
@@ -139,11 +149,13 @@ React SPA
   └─ SSE /api/v1/runs/{id}/events
         │
         ▼
-FastAPI API（不加载 Isaac Sim）
-  ├─ Auth / Project / Asset / Motion / Reward / Run / Artifact API
+FastAPI API（不加载 Isaac Sim，本地文件或 Compose 存储后端）
+  ├─ Local Access / Project / Asset / Robot / Motion / Reward / Run / Artifact API
   ├─ Application Services
   ├─ Domain Contracts / State Machine / Policies
-  └─ PostgreSQL 16 / Redis 7 / MinIO(S3)
+  └─ Storage/Queue profile
+       ├─ Local File Mode：文件仓库 + 本地 scheduler
+       └─ Compose Mode：PostgreSQL 16 + Redis 7 + MinIO(S3) + Celery
         │
         ▼
 Outbox Dispatcher → Celery/Redis 分队列
@@ -156,32 +168,33 @@ Outbox Dispatcher → Celery/Redis 分队列
   └─ maintenance
         │
         ▼
-GPU 服务器 worker
+本地 Docker worker（WSL2/Linux）
   ├─ GVHMR Python 3.10 / Torch 2.3.0+cu121
   ├─ GMR Python 3.10 / Mink / MuJoCo
   ├─ Isaac Lab v2.3.0 / Isaac Sim 5.1.0.0 / Python 3.11
   └─ Unitree MuJoCo / SDK2 / MuJoCo 3.3.6
 ```
 
-### 3.2 本机与服务器边界
+### 3.2 本地运行边界
 
-本机 Windows 允许运行：
+本地项目启动后，API、前端、GPU worker、训练、导出和 sim2sim 均属于同一个用户工作区。默认 `Local File Mode` 不启动外部数据库和消息队列，由本地 scheduler 编排进程并把事实写入 `runtime/`；`Compose Mode` 才启动 PostgreSQL、Redis、MinIO 和 Celery。两种模式都由本地浏览器访问 localhost，不依赖云端服务。
 
-- React/Vite、TypeScript typecheck、Playwright；
-- FastAPI、Pydantic schema、SQLAlchemy、迁移和 API 集成测试；
-- Docker Compose 的 PostgreSQL、Redis、MinIO；
-- G1 MuJoCo PNG 预览原型和 CPU 逻辑测试；
-- 模拟 worker、契约测试和 fixtures。
+Windows 运行时要求：
 
-本机不作为正式训练验收环境，不将 Windows CUDA 结果写入发布 manifest。
+- Windows 11 安装 WSL2、Ubuntu 22.04、Docker Desktop/WSL2 集成和 NVIDIA WSL CUDA 支持；
+- 所有 Linux 容器、Isaac Lab、MuJoCo、训练和 sim2sim 任务统一在 WSL2 Ubuntu 22.04 内执行；
+- Windows 主机只作为 CLI 入口和浏览器宿主，代码挂载、GPU 映射、模型缓存和训练数据必须经 WSL2/Compose 路径验证；
+- Windows WSL2 必须执行与 Linux 相同的训练、导出和 sim2sim 测试，不把 Windows 视为功能缩水的开发模式。
 
-GPU 服务器运行：
+Linux 运行时要求：
 
-- GVHMR、GMR、Motion Compiler GPU/CPU worker；
-- Isaac Lab + Isaac Sim headless 训练、play、export；
-- Unitree MuJoCo sim2sim；
-- EGL 离屏渲染和报告视频生成；
-- GPU 采集器、lease 调度器和完整运行 manifest 采集。
+- Ubuntu 22.04、NVIDIA 驱动、Docker Engine 和 NVIDIA Container Toolkit；
+- 使用与 WSL2 相同的 Compose 文件、环境变量契约、worker 镜像和数据目录结构；
+- Linux 主机直接提供 GPU 训练能力，不依赖额外远程 GPU 服务器。
+
+允许联网下载依赖和模型，但所有下载内容必须登记来源 URL、版本或 revision、许可证、文件大小和 SHA-256。未经登记的浮动缓存不能直接进入训练或发布。
+
+未来接入 GPU 服务器或团队共享集群时，只增加远程 worker/调度部署，不修改本地项目的训练、产物和 manifest 契约。
 
 ### 3.3 运行目录和对象流
 
@@ -190,15 +203,15 @@ GPU 服务器运行：
 ```text
 runs/{project_id}/{run_id}/{attempt_id}/
   manifest/manifest.json
-  input/                # 从对象存储下载的只读副本
+  input/                # Local File 为本地只读副本，Compose 为对象存储下载副本
   work/                 # 当前阶段临时文件
-  outputs/              # 阶段输出，上传前可校验
+  outputs/              # 阶段输出，提交前可校验
   logs/                 # stdout/stderr 和结构化日志
   metrics/              # JSONL/CSV/曲线中间文件
   reports/
 ```
 
-阶段完成后先写临时对象 key，再计算 SHA-256，最后在 PostgreSQL 事务中登记 `artifacts`。API 不将大对象作为响应体中转。
+阶段完成后先写临时文件或临时对象 key，再计算 SHA-256，最后以原子文件提交（Local File Mode）或 PostgreSQL 事务登记（Compose Mode）。API 不将大对象作为响应体中转。
 
 ## 4. 目标工作区和模块分工
 
@@ -218,7 +231,7 @@ AllRobotRLLLab/
 │  │  ├─ api/                      # router、DTO、依赖注入
 │  │  ├─ application/              # 用例、事务、命令、查询
 │  │  ├─ domain/                   # 实体、值对象、端口、状态机、策略
-│  │  ├─ adapters/                 # G1、GVHMR、GMR、Isaac、MuJoCo 实现
+│  │  ├─ adapters/                 # 通用 RobotSpec、机器人实例及 GVHMR/GMR/Isaac/MuJoCo 实现
 │  │  ├─ infrastructure/           # DB、Redis、S3、subprocess、GPU 采集
 │  │  ├─ workers/                  # Celery task 和阶段 runner
 │  │  └─ config/                   # 配置和运行时版本
@@ -228,7 +241,8 @@ AllRobotRLLLab/
 │     ├─ contract/
 │     └─ fixtures/
 ├─ adapters/
-│  └─ unitree_g1_29dof/
+│  ├─ generic_articulated/       # 通用 RobotSpec、传动模型和后端生成端口
+│  └─ unitree_g1_29dof/          # G1 的 RobotSpec 实例和厂商 sim2sim 适配器
 │     ├─ robot_spec.json
 │     ├─ assets.lock.json
 │     ├─ gmr_mapping.yaml
@@ -240,12 +254,16 @@ AllRobotRLLLab/
 │  ├─ motion-image/                # GMR/GVHMR/Motion Compiler 镜像定义
 │  ├─ isaac-image/                 # Isaac Lab/Isaac Sim 镜像或启动脚本
 │  └─ sim2sim-image/               # Unitree MuJoCo/SDK2 镜像
+├─ cli/                             # robotlab install/init/doctor/start/stop/run 等命令
 ├─ infra/
 │  ├─ compose/                     # 本地和平台服务 compose
 │  ├─ gpu-server/                  # GPU worker、systemd、健康检查
 │  ├─ migrations/
 │  └─ monitoring/
 ├─ schemas/                        # 发布后的 JSON Schema 快照
+├─ runtime/                        # 用户本地运行数据，不提交到源码仓库
+├─ assets/                         # 用户注册的机器人资产索引，不复制原始资产
+├─ projects/                       # 项目、动作、配置、日志和产物索引
 ├─ docs/
 ├─ third_party/                    # 只读上游源码和许可证
 └─ frontend-prototype/             # 当前原型，迁移完成前只修 bug，不扩展生产业务
@@ -259,13 +277,14 @@ AllRobotRLLLab/
 | --- | --- | --- |
 | `apps/web` | 页面、表单、预览交互、缓存、SSE 展示、错误可视化 | 训练命令、权威 IK、奖励计算、直接读数据库 |
 | `packages/contracts` | 版本化 schema、错误码、枚举、生成类型 | 数据库连接、业务副作用 |
-| `backend/api` | HTTP/SSE、认证、权限、DTO 转换 | 长任务、Isaac import、复杂动作算法 |
+| `backend/api` | HTTP/SSE、本地访问控制、可选项目权限、DTO 转换 | 长任务、Isaac import、复杂动作算法 |
 | `backend/application` | 编排用例、事务、幂等、事件 | 具体 GPU 命令、SQL 细节 |
 | `backend/domain` | 状态机、不变量、值对象、端口 | FastAPI、Celery、SQLAlchemy、仿真 SDK |
 | `backend/adapters` | G1、GVHMR、GMR、Isaac、MuJoCo 具体实现 | 用户权限和页面逻辑 |
 | `backend/infrastructure` | DB/Redis/S3/subprocess/GPU 资源 | 任务语义和奖励公式 |
 | `backend/workers` | 阶段执行、日志、取消、产物登记 | 接收任意用户代码 |
-| `adapters/unitree_g1_29dof` | 机器人资产、映射、任务注册、控制和验收规则 | 修改通用 API 或 domain |
+| `adapters/generic_articulated` | 通用 RobotSpec、关节/执行器/传动模型和后端生成端口 | 厂商专有协议和页面逻辑 |
+| `adapters/unitree_g1_29dof` | G1 的资产、映射、任务注册、控制和验收规则 | 修改通用 API 或 domain |
 
 ### 4.3 依赖方向
 
@@ -293,7 +312,7 @@ frontend features → contracts/entities/shared
 ```text
 /projects                       项目列表和项目成员
 /projects/:id/assets            视频/动作资源、上传和版本
-/projects/:id/robots            G1 适配器能力与自检
+/projects/:id/robots            已注册机器人适配器能力与自检
 /projects/:id/motion/:id        3D动作预览、时间轴、关节编辑、质量告警
 /projects/:id/reward/:id        注册奖励和参数表单
 /projects/:id/runs/:id          训练日志、指标、GPU、视频和阶段状态
@@ -318,7 +337,7 @@ frontend features → contracts/entities/shared
 
 | 模块 | 不变量 |
 | --- | --- |
-| Project | 成员只能访问授权项目；项目软删除不影响已发布产物 |
+| Project | 本地单用户默认拥有本地项目；未来多用户模式下成员只能访问授权项目；项目软删除不影响已发布产物 |
 | Asset | 逻辑资源可有多个不可变版本；对象 hash 唯一登记 |
 | Robot | 适配器必须通过资产、版本、关节和能力自检 |
 | Motion | 坐标、四元数、fps、关节顺序必须显式；非法数据不可训练 |
@@ -338,6 +357,8 @@ class MotionSourceAdapter(Protocol):
 
 class RobotAdapter(Protocol):
     def get_spec(self) -> RobotSpec: ...
+    def validate_assets(self) -> ValidationResult: ...
+    def compile_backend_configs(self, spec: RobotSpec, out_dir: Path) -> CompilationResult: ...
     def validate_motion(self, motion: RetargetMotion) -> ValidationResult: ...
     def compile_motion(self, motion: RetargetMotion, config: TrainingConfig, output_dir: Path) -> TrainMotionResult: ...
     def validate_training_manifest(self, manifest: RunManifest) -> ValidationResult: ...
@@ -360,7 +381,13 @@ class Sim2SimAdapter(Protocol):
 
 所有契约必须带 `schema_version`/`format_version`，数组必须声明 dtype、shape、坐标系和来源。大数组放对象存储，JSON 只登记 URI 和摘要。
 
-### 7.1 `RobotSpec`
+### 7.1 通用 `RobotSpec`（G1 为实例）
+
+`RobotSpec` 是平台唯一的机器人适配事实源，设计目标是覆盖具有关节的主流机器人，而不是复刻 G1 配置。任何厂家、型号和 DoF 数量都必须通过同一份契约描述，再由后端生成 Isaac、Motion/GMR 和 MuJoCo 所需的具体配置。G1 的 29 DoF、关节名称和 Unitree 控制参数只存在于 `adapters/unitree_g1_29dof` 实例中。
+
+用户录入的字段与平台派生字段必须分开保存。用户录入资产 URI、关节/执行器/传动参数、控制周期和初始状态；平台派生后端文件、动作维度、归一化参数、qpos 地址、检查报告和 manifest hash。关键控制参数缺失时必须失败，不能依据 URDF/MJCF 猜测后静默继续。
+
+下面的 JSON 仅展示 G1 适配器如何实例化通用契约；正式 schema 不得把 `dof=29`、Unitree 命名或某一种控制模式设为全局固定值。
 
 ```json
 {
@@ -402,6 +429,64 @@ class Sim2SimAdapter(Protocol):
 ```
 
 G1 首期必须提供 29 个关节的完整顺序、qpos 地址、body 名称、限位、PD 和动作缩放自动化检查。任何 Isaac 与 MuJoCo 顺序不一致都必须在适配器校验阶段失败。
+
+### 7.1.1 关节、执行器和传动契约
+
+每个关节必须有稳定的逻辑 ID，并同时声明策略顺序、仿真名称和部署名称。执行器参数优先使用关节侧 SI 单位；如用户提供电机侧参数，必须显式标注参考侧和换算方向。
+
+```yaml
+joints:
+  - id: left_hip_pitch
+    sim_name: left_hip_pitch_joint
+    deployment_name: left_hip_pitch
+    policy_index: 0
+    type: revolute                 # revolute | prismatic | fixed | mimic
+    axis: [0, 1, 0]
+    limits:
+      position: [-2.5, 2.0]       # rad 或 m
+      velocity: 32.0               # rad/s 或 m/s
+      effort: 88.0                 # N m 或 N
+    home_position: -0.1
+    direction: 1
+    zero_offset: 0.0
+    actuator_ids: [left_hip_pitch_motor]
+
+actuators:
+  - id: left_hip_pitch_motor
+    model: implicit_pd             # implicit_pd | explicit_torque | velocity_pd | impedance
+    command_space: position        # position | velocity | torque | mixed
+    reference_side: joint
+    gains: {kp: 100.0, kd: 2.0}
+    limits: {effort: 88.0, velocity: 32.0}
+    transmission:
+      type: direct                  # direct | gear | differential | tendon | linkage | elastic
+      gear_ratio: 1.0
+      efficiency: 0.95
+      direction: 1
+    dynamics:
+      armature: 0.01
+      viscous_friction: 0.0
+      coulomb_friction: 0.01
+    action: {scale: 0.22, offset: 0.0}
+
+transmissions:
+  - id: waist_differential
+    type: differential
+    actuator_ids: [waist_motor_left, waist_motor_right]
+    joint_ids: [waist_roll, waist_pitch]
+    mapping_matrix: [[0.5, 0.5], [0.5, -0.5]]
+```
+
+必须支持的主流绑定方式包括：
+
+- 一执行器对应一关节：直驱或减速器关节；
+- 一执行器驱动多个关节：连杆、腱绳或共享传动；
+- 多执行器驱动一关节：并联或冗余驱动；
+- 差动/并联传动：使用显式映射矩阵；
+- mimic 关节：使用主从关节约束；
+- 串联弹性执行器：首期使用等效阻抗模型，保留弹簧刚度、阻尼和传感器延迟扩展字段。
+
+平台不能把动作类型限制为某些预设动作。动作经过关节映射后进入仿真，执行器的力矩、速度和位置限制只作为物理模型和饱和诊断，不得静默删除输入帧。每次编译必须输出关节映射、传动矩阵、动作缩放、饱和比例和超限原因。
 
 ### 7.2 `SourceMotionDescriptor`
 
@@ -518,7 +603,7 @@ NPZ 同时写入 `joint_names`、`body_names`、`coord_frame`、`quat_convention
 }
 ```
 
-`fall`、`joint_limit`、`nan_inf`、控制周期和执行器硬限位不能被普通用户关闭。奖励实现只来自服务器内置注册表，worker 启动前对 term id、版本、参数范围和实现 hash 做白名单校验。
+`fall`、`joint_limit`、`nan_inf`、控制周期和执行器硬限位不能被普通用户关闭。奖励实现只来自平台固定 worker 镜像中的注册表，worker 启动前对 term id、版本、参数范围和实现 hash 做白名单校验。
 
 ### 7.7 `TrainingConfig`
 
@@ -733,7 +818,7 @@ robot config
 - `stability.contact`、`stability.foot_slip`；
 - 硬终止：`nan_inf`、`fall`、`joint_limit`、`bad_anchor_orientation`、`timeout`。
 
-每个 term 的实现、版本和单元测试在服务器镜像中固定。用户调整只改变 JSON 参数，不改变代码路径。
+每个 term 的实现、版本和单元测试在固定 worker 镜像中锁定。用户调整只改变 JSON 参数，不改变代码路径。
 
 ### 9.4 训练阶段输出
 
@@ -887,15 +972,28 @@ CREATED
 | `GET` | `/runs/{id}/comparison` | 父 Run 与当前 Run 对比 |
 | `GET` | `/artifacts/{id}` | 产物元数据和短时下载地址 |
 
-启动 `/runs` 必须使用幂等键。API 只创建事务和 outbox，不等待 worker。
+启动 `/runs` 必须使用幂等键。Local File Mode 的 API 只向 `robotlabd` scheduler 提交一次命令，不等待 worker；Compose Mode 在事务中写入 Run/Attempt 和 outbox，再由 dispatcher 投递。
 
-## 12. 数据库、对象存储和事件
+## 12. 持久化、对象存储和事件
 
-### 12.1 PostgreSQL 表
+平台提供两个可替换 profile：
+
+| Profile | 适用范围 | 持久化与调度实现 |
+| --- | --- | --- |
+| `local-file`（默认） | 单机单用户、多作业并发 | 本地文件仓库、内容寻址 artifacts、`state.json`/`events.jsonl`/`metrics.jsonl`、`robotlabd` scheduler、PID/lease 文件 |
+| `compose`（可选） | 团队共享、远程 GPU、多用户、负载均衡 | PostgreSQL、Redis/Celery、MinIO/S3；与远程部署保持同一服务边界 |
+
+两种 profile 必须实现同一组 domain ports：`ProjectRepository`、`AssetRepository`、`RunRepository`、`ArtifactStore`、`EventStore`、`JobScheduler`。前端 API、Run Manifest、PolicyBundle 和 Sim2SimReport 不得感知具体 profile。
+
+### 12.1 Compose Mode：PostgreSQL 表
 
 核心表：`users`、`projects`、`project_members`、`assets`、`asset_versions`、`robot_adapters`、`robot_versions`、`reward_templates`、`reward_configs`、`motion_edits`、`runs`、`attempts`、`run_manifests`、`metric_points`、`log_events`、`artifacts`、`sim2sim_evaluations`、`evaluation_seeds`、`audit_events`、`outbox_events`。
 
 所有业务状态迁移和审计事件必须在同一事务中写入。`sha256`、manifest hash 和 artifact hash 建唯一索引；历史 manifest 只读。
+
+### 12.1.1 Local File Mode：文件事实源
+
+Local File Mode 不使用 PostgreSQL、Redis 或 MinIO。每个实体以不可变版本目录保存，Run 以 `manifest.json`、`state.json`、`events.jsonl`、`metrics.jsonl` 和 `artifacts/` 组成。`robotlabd` 是唯一的状态写入者，CLI/API 通过本地 IPC 或锁文件提交命令；文件提交使用临时文件、`fsync` 和原子 rename。`index.json` 仅为可重建缓存，不能作为唯一事实源。
 
 ### 12.2 对象 key
 
@@ -905,25 +1003,26 @@ projects/{project_id}/assets/{asset_id}/versions/{version_id}/derived/{kind}/{ra
 projects/{project_id}/runs/{run_id}/attempts/{attempt_id}/artifacts/{kind}/{random_name}
 ```
 
-原始文件名只存数据库展示字段；不直接拼接进 key。视频大于 100 MB 默认 multipart。对象下载先做项目权限检查，再返回短时 presigned URL。
+原始文件名只作为展示字段保存，不直接拼接进路径。Local File Mode 使用内容寻址目录和本地文件流；Compose Mode 使用对象存储 key，视频大于 100 MB 默认 multipart。对象读取先做项目和 Run 状态校验，Compose Mode 可返回短时 presigned URL。
 
-### 12.3 Redis/Celery/outbox
+### 12.3 Compose Mode：Redis/Celery/outbox
 
 API 在一个 PostgreSQL 事务中写 `Run`、`Attempt`、初始状态和 `outbox_events`；dispatcher 投递成功后标记 outbox。重复投递由 `attempt_id + stage + input_hash` 幂等键消除。
 
 Redis 只承载 broker、短期事件、锁、心跳、限流和缓存，不作为唯一事实源。SSE 历史事件从 PostgreSQL `log_events`/`metric_points` 恢复。
 
-### 12.4 单团队登录与项目权限
+Local File Mode 不启用 Redis/Celery/outbox。`robotlabd` 直接管理本地子进程和 GPU lease；SSE 历史事件从每个 Run 的 `events.jsonl` 和 `metrics.jsonl` 按 `seq` 恢复。调度器崩溃后依据 lease、PID、心跳和最后事件执行恢复扫描。
 
-首期采用轻量的内部登录，不引入复杂的多租户计费系统：
+### 12.4 本地单用户与未来项目权限
 
-- API 使用 OIDC/反向代理提供的身份或短期 JWT；密码和 token 不写入业务表。
-- `users` 保存稳定用户 id、email、状态和最后登录时间；项目通过 `project_members` 绑定角色。
-- 首期角色为 `owner`、`editor`、`viewer`；只有 `owner/editor` 能上传、编辑和创建 Run，`viewer` 只能查看授权项目，产物下载可单独要求 `owner` 批准。
-- 每个查询和下载都必须带 `project_id` 权限条件；worker 使用短期 job token，只能访问当前 attempt 对象。
-- 所有登录、成员变更、配置冻结、训练取消、重试、发布和下载写入 `audit_events`。
+首期默认本地单用户运行，不要求登录，不建设登录页、用户注册或远程账号体系。启动命令生成本地实例标识，API 默认只监听本机回环地址；项目、动作、配置、日志、checkpoint、策略包和报告全部写入用户配置的数据目录。
 
-数据模型预留 `organization_id`、项目配额、队列优先级和 worker pool 字段。未来扩展多用户时增加组织/租户和策略，不修改 Asset、Run、Artifact 或 adapter 契约。
+- 本地模式下所有项目默认为当前实例所有者，前端不展示登录和成员管理流程；
+- 单个用户可以同时提交多个训练、导出和 sim2sim 作业；本地调度器按每张 GPU 的实时显存、利用率、CPU、温度和 worker 健康状态决定并发或排队；
+- 对象下载、训练启动和产物导出仍必须经过 `project_id`、状态和路径校验，防止跨项目读取；
+- `users`、`project_members`、`organization_id`、项目配额、队列优先级和 worker pool 等字段保留为未来多用户/远程部署扩展点；
+- 后续接入团队共享服务器时，再启用 `owner`、`editor`、`viewer` 和短期 job token，不修改 Asset、Run、Artifact 或 adapter 契约；
+- 本地安装、配置冻结、训练取消、重试、发布和导出仍写入 `audit_events`，便于复现和故障追踪。
 
 ## 13. GPU 动态调度和负载均衡
 
@@ -933,7 +1032,7 @@ Redis 只承载 broker、短期事件、锁、心跳、限流和缓存，不作�
 
 ### 13.2 GPU lease
 
-调度器维护每张卡：GPU UUID、显存总量、当前已分配、利用率、温度、健康状态、运行中的 lease。lease 使用 Redis 锁和 TTL，worker 每 10 秒心跳；失联后由调度器回收并将 attempt 标记为 `WORKER_LOST`，不删除已有产物。
+调度器维护每张卡：GPU UUID、显存总量、当前已分配、利用率、温度、健康状态、运行中的 lease。Compose Mode 使用 Redis 锁和 TTL；Local File Mode 使用带过期时间的 lease 文件和进程锁。worker 每 10 秒心跳；失联后由调度器回收并将 attempt 标记为 `WORKER_LOST`，不删除已有产物。
 
 ### 13.3 动态装箱规则
 
@@ -949,22 +1048,92 @@ Redis 只承载 broker、短期事件、锁、心跳、限流和缓存，不作�
 
 GPU OOM 时记录显存快照、配置 hash、进程命令和 worker 镜像；自动降低并发或重新排队不改变原 manifest。队列超过容量返回 `QUEUE_CAPACITY_EXCEEDED`，不能无限积压。
 
-## 14. 部署和运行环境
+## 14. 本地部署和运行环境
 
-### 14.1 平台服务 Compose
+### 14.1 本地运行模式
 
-平台服务统一用 Docker Compose 运行：
+项目不是远程 Web SaaS，而是完整交付到用户本地的工程。首期默认使用 `Local File Mode`，不依赖 Docker、PostgreSQL、Redis 或 MinIO；`Compose Mode` 作为团队共享、远程 GPU、多用户和负载均衡的可选扩展。两种模式必须提供相同的 API、前端工作流、Run Manifest、策略包和 sim2sim 报告格式。
 
 ```text
-web → api-1/api-2 → postgres-16
-                    ├─ redis-7
-                    ├─ minio/s3
-                    └─ celery-dispatcher/cpu-workers
+Local File Mode:
+robotlab CLI
+    └─ robotlabd（FastAPI + 本地 scheduler）
+       ├─ web（React 本地工作台）
+       ├─ file repository / artifact store
+       └─ GPU workers（GVHMR、GMR、Isaac、sim2sim）
+
+Compose Mode:
+robotlab CLI
+    └─ Docker Compose
+       ├─ web + api
+       ├─ postgres-16 + redis-7 + minio
+       ├─ celery-dispatcher/cpu-workers
+       └─ GPU workers（GVHMR、GMR、Isaac、sim2sim）
 ```
 
-API 容器禁止安装或导入 Isaac Sim。前端和 API 可以在服务器或团队内网部署；GPU worker 通过内部网络访问 PostgreSQL、Redis 和对象存储。
+Compose Mode 的 API 容器禁止安装或导入 Isaac Sim；各 worker 通过 Compose 网络访问 PostgreSQL、Redis 和 MinIO。Local File Mode 的 API 和 worker 通过本地文件仓库及 scheduler 通信。所有项目数据、模型缓存、日志、checkpoint、策略包和报告写入用户指定的 `runtime/` 数据目录。
 
-### 14.2 GPU worker 环境
+### 14.1.1 无数据库本地模式（单用户多作业）
+
+本地最终交付可以不依赖 PostgreSQL、Redis 和 MinIO。`robotlabd`（本地 API 与调度控制器）作为唯一调度状态写入者，使用文件原子提交、进程锁和追加事件日志管理多个并发作业：
+
+```text
+用户提交 Run
+  → manifest.json（冻结配置）
+  → scheduler 读取 resources 声明和 GPU 实时指标
+  → 并发启动满足装箱条件的进程，其他 Run 进入 QUEUED
+  → 每个 Run 独立 state.json / events.jsonl / metrics.jsonl
+  → 产物写入 content-addressed artifacts/ 并登记 hash
+```
+
+无数据库模式必须满足：
+
+1. 每个 Run 使用独立目录和锁文件；同一 Run 只能有一个活动 attempt。
+2. `state.json` 通过临时文件、`fsync` 和原子 rename 更新；`events.jsonl` 使用单调 `seq`，前端可断线续读。
+3. 作业提交、取消、重试和恢复由单一 scheduler 串行化；CLI 与 API 通过本地 IPC/锁提交命令，不能并发修改状态文件。
+4. scheduler 每 5–10 秒采集 `nvidia-smi` 指标，按 `gpu_memory_gb`、预计利用率、CPU、shared memory、温度和 `exclusive_gpu` 做动态装箱。
+5. 首期每张 RTX 4090 默认最多 3 个训练作业；显存或利用率超过阈值时只停止接纳新作业，不驱逐已运行作业。
+6. 进程退出、机器重启或 scheduler 崩溃后，启动恢复扫描依据 PID、心跳和最后事件把 Run 标记为 `INTERRUPTED`、重新排队或保留可恢复 checkpoint。
+7. `index.json`、项目列表和统计数据均为可重建缓存，损坏时从 manifest、state 和 artifact 目录重建。
+
+该模式可以保持与数据库模式相同的 API 和前端体验，但只保证单机单用户范围内的并发和恢复能力；不提供跨机器队列、团队权限和高可用复制。
+
+### 14.2 统一命令行入口
+
+首期提供稳定、可脚本化的 `robotlab` 命令，Windows WSL2 Ubuntu 22.04 和原生 Linux Ubuntu 22.04 使用同一套 Linux 运行时：
+
+```text
+robotlab install              检查宿主机、WSL2、Docker、GPU 和联网前置条件
+robotlab init                 创建本地配置、数据目录、运行 profile 和项目工作区
+robotlab doctor               重新检查当前 profile 的组件、版本、GPU、挂载和服务连通性
+robotlab start                启动本地 API、前端、scheduler 和 worker（Compose profile 另启数据库服务）
+robotlab stop                 停止本地服务，不删除项目数据和产物
+robotlab status               查看服务、队列、GPU worker 和运行状态
+robotlab robot add --path ... 注册用户提供的机器人资产包
+robotlab robot list           查看已注册机器人及自检状态
+robotlab run --project ...    从冻结配置启动动作处理、训练或 sim2sim 作业
+robotlab logs <run_id>        查看结构化日志和阶段进度
+robotlab artifact export ...  导出策略包、manifest、报告和校验和
+```
+
+`install` 和 `doctor` 只检查并输出明确安装指引，不自动修改 Windows 驱动、WSL2、内核、Docker、NVIDIA 系统组件或 Conda 环境。Local File Mode 不检查 PostgreSQL、Redis、MinIO 和 Docker；Compose Mode 才检查这些服务。缺少组件时返回稳定错误码、检测版本、要求版本、官方安装地址和下一步命令；用户手动安装后再次运行 `doctor`。
+
+### 14.3 Windows 运行要求
+
+1. Windows 11 安装 WSL2、Ubuntu 22.04 和 NVIDIA WSL CUDA 支持；选择 Compose Mode 时再安装 Docker Desktop/WSL2 集成。
+2. Local File Mode 的 Linux 运行时、Isaac Lab、MuJoCo、训练和 sim2sim 任务统一在 WSL2 Ubuntu 22.04 内执行；Compose Mode 额外通过 Docker 容器执行。
+3. Windows 主机只作为 CLI 入口和浏览器宿主；代码挂载、GPU 映射、模型缓存和训练数据必须经过 WSL2 路径验证。
+4. Windows WSL2 必须具备与 Linux 相同的训练、导出和 sim2sim 能力，不允许把 Windows 版本定义为仅开发模式。
+
+### 14.4 Linux 运行要求
+
+1. Ubuntu 22.04 和 NVIDIA 驱动；选择 Compose Mode 时再安装 Docker Engine 和 NVIDIA Container Toolkit。
+2. Local File Mode 使用本地 Conda/虚拟环境和进程 scheduler；Compose Mode 使用与 WSL2 相同的 Compose 文件、环境变量契约、worker 镜像和数据目录结构。
+3. Linux 主机直接提供 GPU 训练能力，不依赖额外远程 GPU 服务器。
+
+允许联网下载依赖和模型，但下载内容必须登记来源 URL、版本或 revision、许可证、文件大小和 SHA-256。未经登记的浮动模型缓存不能直接进入训练或发布。
+
+### 14.5 分环境 worker 基线
 
 必须分环境或分容器：
 
@@ -977,18 +1146,40 @@ API 容器禁止安装或导入 Isaac Sim。前端和 API 可以在服务器或�
 
 manifest 还必须记录 CUDA driver、NVIDIA driver、容器 digest、Unitree RL Lab server SHA、Unitree MuJoCo overlay SHA 和 Isaac Sim source/build identity。未采集的字段不能填假值，使用 `pending` 并阻止发布验收。
 
-### 14.3 服务器启动前检查
+### 14.6 本地 doctor 检查链
 
 ```text
 GPU 设备和驱动可见
-→ Docker/Conda 环境 hash 与 lockfile 一致
+→ WSL2/Ubuntu 或 Linux 版本满足要求
+→ Local File Mode：Conda/虚拟环境、进程权限和磁盘空间可用
+  或 Compose Mode：Docker Engine/Desktop、NVIDIA runtime、挂载和磁盘空间可用
 → Isaac Lab/Isaac Sim smoke import
 → GVHMR checkpoint、SMPL/SMPL-X 模型和许可证存在
-→ G1 XML/URDF/MJCF mesh hash 一致
+→ 已注册机器人三侧资产和 mesh hash 一致
 → MuJoCo EGL renderReady=true
-→ PostgreSQL/Redis/MinIO 健康
-→ GPU lease 服务和 worker 心跳正常
+→ Local File Mode：robotlabd、scheduler 和本地 worker 心跳正常
+  或 Compose Mode：PostgreSQL/Redis/MinIO 健康、dispatcher 和 worker 心跳正常
 ```
+
+### 14.7 用户机器人资产注册
+
+平台不替用户下载或假定某个厂家的完整机器人资产。用户必须先注册自己的资产包：
+
+```bash
+robotlab robot add --path /data/robots/<robot_asset_package>
+```
+
+注册过程生成不可变 `RobotVersion` 和 `RobotSpec`，并检查：
+
+- URDF/MJCF/XML/USD 文件存在性、可解析性和许可证；
+- 网格引用、相对路径、纹理和碰撞资源；
+- 关节、DoF、body、qpos/qvel 地址和轴向；
+- Isaac、Motion/GMR 和 MuJoCo sim2sim 三侧资产声明；
+- 关节映射、初始状态、位置/速度/力矩限位；
+- 执行器、PD、动作缩放、控制周期和传动关系；
+- 资产及派生配置的 SHA-256、来源、版本和许可证。
+
+平台只生成经过校验的 staging 目录和后端配置，不修改用户原始资产，也不从 URDF/MJCF 静默推导缺失的关键控制参数。缺少关键字段时返回字段级失败原因，未通过自检的机器人不能进入实验选择器。
 
 ## 15. sim2sim 验收规则
 
@@ -1104,7 +1295,7 @@ GPU 设备和驱动可见
 
 ### 18.3 P0 系统验收
 
-1. 服务器 smoke：Isaac Lab v2.3.0 + Isaac Sim 5.1.0.0 空场景和 G1 mimic。
+1. 本地 WSL2/Linux smoke：Isaac Lab v2.3.0 + Isaac Sim 5.1.0.0 空场景和 G1 mimic。
 2. 视频模式：一条合法视频真实完成 GVHMR、GMR、Motion Compiler、训练和产物生成。
 3. 直接模式：G1 `.npz/.csv/.pt/.pkl` 各一条、人体姿态文件至少一条完成闭环。
 4. 29 DoF 契约测试通过，包含 joint order、四元数、fps、NPZ shape 和控制周期。
@@ -1118,16 +1309,20 @@ GPU 设备和驱动可见
 ### 18.4 发布验收
 
 - API 不加载 Isaac Sim；长任务不在 HTTP 请求线程运行。
-- Postgres 是唯一业务事实源；Redis 或本地目录丢失后状态可恢复。
+- 业务事实源由运行 profile 决定：Compose Mode 使用 Postgres；Local File Mode 使用不可变 manifest、state/event journal 和内容寻址文件。两种模式都必须支持状态恢复，Redis、索引缓存或临时目录丢失不得破坏已提交 Run。
 - 原始资源、配置、manifest、attempt 和产物不可变；删除采用软删除。
 - GVHMR/GMR/Isaac/sim2sim 版本、许可证和 overlay 可追溯。
-- Docker/Conda lockfile、GPU 驱动和容器 digest 在服务器可复现。
+- Docker/Conda lockfile、GPU 驱动和容器 digest 在本地 WSL2/Linux 环境可复现；未来远程 worker 复用同一 lockfile。
 
 ## 19. 实施顺序和 Definition of Done
 
-### 19.1 阶段 A：契约与 G1 适配器
+### 19.0 阶段 0：本地项目骨架和 CLI
 
-交付 `packages/contracts`、G1 RobotSpec、关节/身体/控制映射、错误码、fixtures 和 contract tests。DoD：G1 29 DoF、MJCF/URDF/Isaac 资产 hash 和版本检查全部自动化。
+交付 Local File Mode、本地运行目录、配置文件模板、可选 Compose Mode 和 `robotlab install/init/doctor/start/stop/status/run/logs/artifact` 命令。DoD：Windows WSL2 Ubuntu 22.04 与原生 Linux Ubuntu 22.04 均可在无数据库、无 Docker 的 Local File Mode 下完成检查、启动本地服务、打开 `localhost` 工作台、提交多个训练作业并按 GPU 负载并发或排队；Compose Mode 作为可选扩展验证，不自动修改系统组件。
+
+### 19.1 阶段 A：通用契约与 G1 实例适配器
+
+交付 `packages/contracts`、通用关节机器人 `RobotSpec`、关节/身体/执行器/传动/控制映射、错误码、fixtures 和 contract tests，再以 G1 作为第一个实例完成注册。DoD：通用 schema 能表达主流一对一和耦合传动；G1 29 DoF、MJCF/URDF/Isaac 资产 hash 和版本检查全部自动化。
 
 ### 19.2 阶段 B：两条动作输入和 Motion Compiler
 
@@ -1135,11 +1330,11 @@ GPU 设备和驱动可见
 
 ### 19.3 阶段 C：正式 API、数据和作业编排
 
-交付 FastAPI、PostgreSQL、Redis、MinIO、outbox、Celery 队列、SSE、权限、attempt 和审计。DoD：所有长任务异步化，断线、重试、取消、失败和下载均可恢复。
+交付 FastAPI、PostgreSQL、Redis、MinIO、outbox、Celery 队列、SSE、本地单用户访问控制、attempt 和审计。DoD：所有长任务异步化，断线、重试、取消、失败和下载均可恢复，数据和产物只写入本地运行目录。
 
 ### 19.4 阶段 D：Isaac Lab/RSL-RL 训练
 
-交付 `g1_mimic` task、完整 TrainingConfig schema、Reward Registry、PPO runner、checkpoint、play 和 GPU 动态装箱。DoD：两张 4090 可并行训练；一个合法动作能在 headless 服务器生成 checkpoint 和指标。
+交付 `g1_mimic` task、完整 TrainingConfig schema、Reward Registry、PPO runner、checkpoint、play 和 GPU 动态装箱。DoD：本地双 4090 或 WSL2 映射 GPU 可并行训练；一个合法动作能在本地 headless worker 生成 checkpoint 和指标。
 
 ### 19.5 阶段 E：导出与 sim2sim
 
@@ -1153,9 +1348,9 @@ GPU 设备和驱动可见
 
 ### 20.1 第二机器人接入规则
 
-第二机器人只能通过新增 adapter 完成：
+第二机器人只能通过新增 `RobotSpec` 实例和 adapter 完成，不能修改通用契约：
 
-- 新 `RobotSpec`、资产 lock、joint/body mapping、控制和动作缩放；
+- 新 `RobotSpec` 实例、资产 lock、joint/body/actuator/transmission mapping、控制和动作缩放；
 - GMR/人体映射和 Motion Compiler plugin；
 - Isaac task 注册和观测/动作 schema；
 - 厂商 sim2sim adapter 和阈值；
@@ -1172,7 +1367,7 @@ GPU 设备和驱动可见
 | 风险/未决项 | 关闭条件 |
 | --- | --- |
 | GVHMR 许可证限制 | 在项目 manifest 登记研究/教育限制；商业用途前取得授权或接入替代后端 |
-| Unitree RL Lab server SHA 缺失 | 服务器采集并写入 manifest，缺失时不发布 |
+| Unitree RL Lab source SHA 缺失 | 运行环境采集并写入 manifest，缺失时不发布 |
 | Isaac Sim source/build identity 缺失 | 记录 pip、容器和 source/build 对应关系 |
 | Unitree MuJoCo 未提交 overlay | 形成独立 commit 或 patch manifest |
 | GMR/Mink 与 MuJoCo 版本兼容性 | 在 GMR worker 中完成固定 fixture 和版本锁定测试 |
@@ -1188,7 +1383,7 @@ GPU 设备和驱动可见
 - 目录和模块依赖图；
 - schema、数据库迁移、OpenAPI 和错误码快照；
 - 本地 Compose 启动说明；
-- GPU 服务器环境检查输出和 lockfile；
+- Windows WSL2/Linux `robotlab doctor` 检查输出、GPU 映射和 lockfile；
 - G1 适配器资产与 hash；
 - 视频和两类直接输入 fixture 的运行记录；
 - 训练、导出和三 seed sim2sim 结果；
@@ -1196,4 +1391,4 @@ GPU 设备和驱动可见
 - 单元、契约、集成和端到端测试命令及结果；
 - 已知问题、失败 Run 和回滚步骤。
 
-最终执行原则：先把 G1 的数据契约、动作处理、训练、导出和 sim2sim 做成可重复的闭环，再通过适配器扩展机器人和任务。任何“为了先跑通”而绕过版本、坐标、关节、许可证、manifest 或安全终止检查的实现都不算完成。
+最终执行原则：先把通用 RobotSpec 在 G1 上的数据契约、动作处理、训练、导出和 sim2sim 做成可重复的本地闭环，再通过同一范式扩展其他具有关节的机器人和任务。任何“为了先跑通”而绕过版本、坐标、关节、许可证、manifest 或安全终止检查的实现都不算完成。

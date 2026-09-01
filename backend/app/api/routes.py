@@ -5,17 +5,20 @@ from __future__ import annotations
 import uuid
 import json
 import hmac
+import tempfile
+import time
 from pathlib import Path
 from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from adapters.unitree_g1_29dof import UnitreeG1Adapter
 from backend.app.adapters.motion import MotionDetectionError, MotionSourceRegistry
 from backend.app.application.motion_editor import MotionArrays, MotionEditVersionStore, MotionEditor
+from backend.app.application.motion_pipeline_service import MotionPipelineError, MotionPipelineService, MotionPipelineStore
 from backend.app.application.manifest_service import load_runtime_versions
 from backend.app.application.asset_service import AssetService
 from backend.app.application.artifact_service import ArtifactService
@@ -27,11 +30,14 @@ from backend.app.application.training_service import TrainingService, TrainingSe
 from backend.app.config.settings import settings
 from backend.app.domain.contracts import Actor, ArtifactRecord, AssetKind, LicenseInfo, MotionEditConfig, ProjectRole, RewardConfig, RunManifest, RunStatus, Sim2SimThresholds, TrainingConfig
 from backend.app.infrastructure.memory import InMemoryUnitOfWork
+from backend.app.infrastructure.local_file import LocalFileUnitOfWork
 from backend.app.infrastructure.local import build_object_store
+from backend.app.infrastructure.object_store import LocalObjectStore
 from backend.app.infrastructure.postgres import PostgresDatabase
 from backend.app.infrastructure.postgres_uow import PostgresUnitOfWork
 from backend.app.infrastructure.preflight import check_minio, check_redis
 from backend.app.infrastructure.queue import CeleryTaskDispatcher, InMemoryTaskDispatcher
+from backend.app.runtime.factory import build_runtime_adapters
 
 
 router = APIRouter()
@@ -40,24 +46,55 @@ motion_registry = MotionSourceRegistry()
 motion_edit_store = MotionEditVersionStore()
 reward_config_store = RewardConfigVersionStore()
 motion_editor = MotionEditor(g1_adapter.get_spec(), ik_solver=g1_adapter.create_ik_solver())
-uow = PostgresUnitOfWork(settings.database_url) if settings.database_url else InMemoryUnitOfWork()
+if settings.database_url:
+    uow = PostgresUnitOfWork(settings.database_url)
+elif settings.storage_mode == "local_file":
+    uow = LocalFileUnitOfWork(settings.runtime_root)
+else:
+    uow = InMemoryUnitOfWork()
 run_service = RunService(uow)
 object_store = build_object_store(settings)
 asset_service = AssetService(uow, object_store)
 artifact_service = ArtifactService(uow, object_store)
-training_service = TrainingService(run_service=run_service, robot_adapter=g1_adapter, workspace=settings.repository_root / ".runtime" / "p3", artifact_service=artifact_service, object_store=object_store)
+runtime_adapters = build_runtime_adapters(settings, workspace=settings.runtime_root / "external")
+training_runner = runtime_adapters["isaac"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab"} else None
+sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "unitree_mujoco"} else None
+training_service = TrainingService(run_service=run_service, robot_adapter=g1_adapter, workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter)
 if settings.execution_mode == "async" and settings.redis_url:
     p3_task_dispatcher = CeleryTaskDispatcher(settings.redis_url)
+elif settings.storage_mode == "local_file":
+    from backend.app.infrastructure.queue import LocalFileTaskDispatcher
+
+    p3_task_dispatcher = LocalFileTaskDispatcher(settings.runtime_root / "scheduler")
 else:
     p3_task_dispatcher = InMemoryTaskDispatcher()
 p3_dispatch_service = P3DispatchService(run_service=run_service, training_service=training_service, task_dispatcher=p3_task_dispatcher)
+motion_pipeline_service = MotionPipelineService(
+    uow=uow,
+    object_store=object_store,
+    robot_adapter=g1_adapter,
+    motion_registry=motion_registry,
+    motion_editor=motion_editor,
+    asset_service=asset_service,
+    store=MotionPipelineStore(settings.runtime_root / "motion_pipelines"),
+    task_dispatcher=p3_task_dispatcher,
+    kinematics_compiler=runtime_adapters["compiler"],
+    gvhmr_runner=runtime_adapters["gvhmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
+    gmr_runner=runtime_adapters["gmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
+)
 
 
 class MotionDetectRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(min_length=1)
+    path: str | None = Field(default=None, min_length=1)
     asset_version_id: str | None = None
+
+
+class MotionProcessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    edit_config: MotionEditConfig | None = None
 
 
 class MotionCompileRequest(BaseModel):
@@ -190,14 +227,17 @@ def _service_error(request: Request, error: RunServiceError) -> HTTPException:
     return _error(request, error.code, error.message, status_code=error.status_code)
 
 
-def _require_real_backend(request: Request) -> None:
-    if settings.is_deployed:
-        raise _error(request, "REAL_BACKEND_NOT_CONFIGURED", f"P3 backend '{settings.p3_backend}' is not registered; deployed API cannot execute CPU smoke", status_code=503)
+def _require_real_backend(request: Request, operation: str = "train") -> None:
+    if not settings.is_deployed:
+        return
+    configured = training_service.training_runner is not None if operation in {"train", "export"} else training_service.sim2sim_adapter is not None
+    if not configured:
+        raise _error(request, "REAL_BACKEND_NOT_CONFIGURED", f"P3 backend '{settings.p3_backend}' has no registered {operation} runner; deployed API cannot execute CPU smoke", status_code=503)
 
 
 @router.get("/health")
 def health(request: Request) -> dict:
-    return {"status": "ok", "request_id": _request_id(request), "contract_versions": ["robot_spec.v1", "source_motion_descriptor.v1", "train_motion_npz.v1", "run_manifest.v1"]}
+    return {"status": "ok", "request_id": _request_id(request), "storage_mode": settings.storage_mode, "runtime_root": str(settings.runtime_root), "contract_versions": ["robot_spec.v1", "source_motion_descriptor.v1", "retarget_motion.v1", "train_motion_npz.v1", "motion_pipeline.v1", "run_manifest.v1"]}
 
 
 @router.get("/health/infrastructure")
@@ -225,7 +265,15 @@ def infrastructure_health(request: Request) -> dict:
     else:
         checks["minio"] = {"configured": False, "healthy": False, "state": "pending"}
     status = "ok" if all(check["configured"] and check["healthy"] for check in checks.values()) else ("degraded" if any(check["configured"] and not check["healthy"] for check in checks.values()) else "pending")
-    return {"status": status, "request_id": _request_id(request), "checks": checks}
+    return {"status": status, "request_id": _request_id(request), "storage_mode": settings.storage_mode, "runtime_root": str(settings.runtime_root), "checks": checks}
+
+
+@router.get("/runtime/doctor")
+def runtime_doctor(request: Request) -> dict:
+    """Expose external runtime registration state for server acceptance checks."""
+    report = runtime_adapters["registry"].doctor(required_only=False)
+    report.update({"request_id": _request_id(request), "p3_backend": settings.p3_backend, "execution_mode": settings.execution_mode})
+    return report
 
 
 @router.post("/projects")
@@ -250,6 +298,25 @@ def get_project(project_id: str, request: Request) -> dict:
     except RunServiceError as exc:
         raise _service_error(request, exc) from exc
     return {"request_id": _request_id(request), "item": project.model_dump(mode="json"), "members": [member.model_dump(mode="json") for member in members], "resource_version": project.updated_at}
+
+
+@router.get("/projects/{project_id}/assets")
+def list_project_assets(project_id: str, request: Request) -> dict:
+    try:
+        records = asset_service.list_assets(actor=_actor(request), project_id=project_id)
+    except RunServiceError as exc:
+        raise _service_error(request, exc) from exc
+    items = [{"asset": asset.model_dump(mode="json"), "versions": [version.model_dump(mode="json") for version in versions]} for asset, versions in records]
+    return {"request_id": _request_id(request), "items": items, "resource_version": str(len(items))}
+
+
+@router.get("/projects/{project_id}/runs")
+def list_project_runs(project_id: str, request: Request) -> dict:
+    try:
+        records = run_service.list_runs(actor=_actor(request), project_id=project_id)
+    except RunServiceError as exc:
+        raise _service_error(request, exc) from exc
+    return {"request_id": _request_id(request), "items": [run.model_dump(mode="json") for run in records], "resource_version": str(len(records))}
 
 
 @router.post("/projects/{project_id}/members")
@@ -286,6 +353,49 @@ def complete_asset_upload(asset_version_id: str, payload: AssetUploadCompleteReq
     except RunServiceError as exc:
         raise _service_error(request, exc) from exc
     return {"request_id": _request_id(request), "item": version.model_dump(mode="json"), "resource_version": version.asset_version_id}
+
+
+@router.put("/uploads/{object_key:path}")
+async def upload_local_object(object_key: str, request: Request, expires: int | None = Query(default=None, ge=0)) -> dict:
+    """Accept browser PUT uploads for Local File Mode.
+
+    Compose mode returns a MinIO URL directly and never reaches this adapter.
+    The local path is streamed to a temporary file so large videos do not need
+    to be buffered in the FastAPI process.
+    """
+    if not isinstance(object_store, LocalObjectStore):
+        raise _error(request, "LOCAL_UPLOAD_UNAVAILABLE", "direct uploads are handled by the configured object store", status_code=404)
+    if expires is not None and expires < int(time.time()):
+        raise _error(request, "UPLOAD_URL_EXPIRED", "upload URL has expired", status_code=403)
+    upload_dir = settings.runtime_root / ".uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".upload.", suffix=".tmp", dir=upload_dir)
+    temporary = Path(temporary_name)
+    try:
+        with open(descriptor, "wb") as stream:
+            async for chunk in request.stream():
+                stream.write(chunk)
+            stream.flush()
+        metadata = object_store.put_file(object_key, temporary, content_type=request.headers.get("content-type"))
+    except Exception as exc:
+        raise _error(request, "UPLOAD_WRITE_FAILED", str(exc), status_code=400) from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {"request_id": _request_id(request), "item": metadata, "resource_version": metadata["sha256"]}
+
+
+@router.get("/objects/{object_key:path}")
+def download_local_object(object_key: str, request: Request, expires: int | None = Query(default=None, ge=0)) -> FileResponse:
+    """Serve Local File Mode objects through the same URL shape as MinIO."""
+    if not isinstance(object_store, LocalObjectStore):
+        raise _error(request, "LOCAL_DOWNLOAD_UNAVAILABLE", "downloads are handled by the configured object store", status_code=404)
+    if expires is not None and expires < int(time.time()):
+        raise _error(request, "DOWNLOAD_URL_EXPIRED", "download URL has expired", status_code=403)
+    try:
+        path = object_store.resolve_path(object_key)
+    except Exception as exc:
+        raise _error(request, "OBJECT_NOT_FOUND", "object is not available", status_code=404) from exc
+    return FileResponse(path, media_type="application/octet-stream", filename=path.name)
 
 
 @router.post("/assets/{asset_version_id}/upload-url")
@@ -369,11 +479,33 @@ def training_config_schema(request: Request) -> dict:
 
 @router.post("/motions/detect")
 def detect_motion(payload: MotionDetectRequest, request: Request) -> dict:
-    path = Path(payload.path).expanduser().resolve()
-    try:
-        path.relative_to(settings.motion_asset_root)
-    except ValueError as exc:
-        raise _error(request, "INPUT_PATH_NOT_ALLOWED", "motion path is outside the configured asset root", details={"asset_root": str(settings.motion_asset_root)}) from exc
+    path: Path | None = None
+    if payload.asset_version_id:
+        with uow:
+            version = uow.assets.version(payload.asset_version_id)
+            asset = uow.assets.get(version.asset_id) if version else None
+        if version is None or asset is None:
+            raise _error(request, "ASSET_VERSION_NOT_FOUND", f"asset version not found: {payload.asset_version_id}", status_code=404)
+        if asset.kind != AssetKind.MOTION:
+            raise _error(request, "ASSET_KIND_INVALID", "asset version is not a motion resource")
+        try:
+            asset_service._require_member(asset.project_id, _actor(request).user_id, ProjectRole.VIEWER)
+        except RunServiceError as exc:
+            raise _service_error(request, exc) from exc
+        if not isinstance(object_store, LocalObjectStore):
+            raise _error(request, "MOTION_SOURCE_NOT_LOCAL", "remote object detection must run in a motion worker", status_code=409)
+        try:
+            path = object_store.resolve_path(version.object_key)
+        except Exception as exc:
+            raise _error(request, "ASSET_OBJECT_NOT_FOUND", "uploaded object is not available", status_code=409) from exc
+    elif payload.path:
+        path = Path(payload.path).expanduser().resolve()
+        try:
+            path.relative_to(settings.motion_asset_root)
+        except ValueError as exc:
+            raise _error(request, "INPUT_PATH_NOT_ALLOWED", "motion path is outside the configured asset root", details={"asset_root": str(settings.motion_asset_root)}) from exc
+    else:
+        raise _error(request, "MOTION_SOURCE_REQUIRED", "path or asset_version_id is required")
     try:
         # Trusted pickle parsing is an internal worker capability, never a
         # user-controlled API flag.
@@ -381,6 +513,41 @@ def detect_motion(payload: MotionDetectRequest, request: Request) -> dict:
     except MotionDetectionError as exc:
         raise _error(request, exc.code, exc.message, details=exc.details) from exc
     return {"request_id": _request_id(request), "descriptor": descriptor.model_dump(mode="json"), "resource_version": descriptor.detector_version}
+
+
+@router.post("/motions/{asset_version_id}/process")
+def process_motion(asset_version_id: str, request: Request, payload: MotionProcessRequest | None = None) -> dict:
+    """Queue or synchronously execute the motion-to-TrainMotionNPZ pipeline."""
+    execution_mode = _execution_mode(request)
+    sync = execution_mode in {"sync", "sync_smoke"}
+    try:
+        record, submission = motion_pipeline_service.submit(actor=_actor(request), asset_version_id=asset_version_id, edit_config=payload.edit_config if payload else None, sync=sync)
+    except MotionPipelineError as exc:
+        raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
+    response = {"request_id": _request_id(request), "item": record.model_dump(mode="json"), "resource_version": record.updated_at}
+    if submission is not None:
+        response["submission"] = submission.model_dump(mode="json")
+    return JSONResponse(status_code=200 if sync or submission is None else 202, content=response)
+
+
+@router.get("/motions/{asset_version_id}/pipeline")
+def get_motion_pipeline(asset_version_id: str, request: Request) -> dict:
+    try:
+        record = motion_pipeline_service.get_for_asset(actor=_actor(request), asset_version_id=asset_version_id)
+    except MotionPipelineError as exc:
+        raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
+    if record is None:
+        raise _error(request, "MOTION_PIPELINE_NOT_FOUND", f"no pipeline has been submitted for asset version: {asset_version_id}", status_code=404)
+    return {"request_id": _request_id(request), "item": record.model_dump(mode="json"), "resource_version": record.updated_at}
+
+
+@router.get("/motion-pipelines/{pipeline_id}")
+def get_motion_pipeline_by_id(pipeline_id: str, request: Request) -> dict:
+    try:
+        record = motion_pipeline_service.get(actor=_actor(request), pipeline_id=pipeline_id)
+    except MotionPipelineError as exc:
+        raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
+    return {"request_id": _request_id(request), "item": record.model_dump(mode="json"), "resource_version": record.updated_at}
 
 
 @router.post("/motion-edits")
@@ -612,16 +779,20 @@ def append_run_event(run_id: str, payload: RunEventAppendRequest, request: Reque
 
 @router.post("/runs/{run_id}/train")
 def train_run(run_id: str, payload: TrainingConfig, request: Request) -> dict:
-    worker_id = _worker_id(request)
-    if _execution_mode(request) == "async":
+    execution_mode = _execution_mode(request)
+    if execution_mode == "async":
+        # User-facing submission is authenticated by project membership. The
+        # worker marker is reserved for internal status/artifact callbacks.
+        worker_id = f"api:{_actor(request).user_id}"
         try:
             submission = p3_dispatch_service.submit_train(run_id=run_id, config=payload, actor=_actor(request), worker_id=worker_id)
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
-    _require_real_backend(request)
+    worker_id = _worker_id(request)
+    _require_real_backend(request, "train")
     try:
-        result = training_service.train_smoke(run_id=run_id, config=payload, worker_id=worker_id)
+        result = training_service.train(run_id=run_id, config=payload, worker_id=worker_id)
     except TrainingServiceError as exc:
         raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
     return {"request_id": _request_id(request), "checkpoint": result.checkpoint.model_dump(mode="json"), "metrics": [metric.model_dump(mode="json") for metric in result.metrics], "artifacts": [artifact.model_dump(mode="json") for artifact in result.artifacts], "resource_version": result.checkpoint.sha256}
@@ -629,14 +800,16 @@ def train_run(run_id: str, payload: TrainingConfig, request: Request) -> dict:
 
 @router.post("/runs/{run_id}/export")
 def export_run(run_id: str, request: Request) -> dict:
-    worker_id = _worker_id(request)
-    if _execution_mode(request) == "async":
+    execution_mode = _execution_mode(request)
+    if execution_mode == "async":
+        worker_id = f"api:{_actor(request).user_id}"
         try:
             submission = p3_dispatch_service.submit_export(run_id=run_id, actor=_actor(request), worker_id=worker_id)
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
-    _require_real_backend(request)
+    worker_id = _worker_id(request)
+    _require_real_backend(request, "export")
     try:
         bundle = training_service.export(run_id=run_id)
     except TrainingServiceError as exc:
@@ -646,14 +819,16 @@ def export_run(run_id: str, request: Request) -> dict:
 
 @router.post("/runs/{run_id}/sim2sim")
 def sim2sim_run(run_id: str, payload: Sim2SimRequest, request: Request) -> dict:
-    worker_id = _worker_id(request)
-    if _execution_mode(request) == "async":
+    execution_mode = _execution_mode(request)
+    if execution_mode == "async":
+        worker_id = f"api:{_actor(request).user_id}"
         try:
             submission = p3_dispatch_service.submit_sim2sim(run_id=run_id, seeds=tuple(payload.seeds), thresholds=payload.thresholds, actor=_actor(request), worker_id=worker_id)
         except P3DispatchError as exc:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
-    _require_real_backend(request)
+    worker_id = _worker_id(request)
+    _require_real_backend(request, "sim2sim")
     try:
         report = training_service.sim2sim(run_id=run_id, seeds=tuple(payload.seeds), thresholds=payload.thresholds)
     except TrainingServiceError as exc:

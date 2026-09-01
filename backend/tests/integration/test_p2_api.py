@@ -58,3 +58,25 @@ def test_infrastructure_health_does_not_claim_unconfigured_services_are_ready() 
     assert response.status_code == 200
     assert response.json()["status"] == "pending"
     assert response.json()["checks"]["postgres"]["state"] == "pending"
+
+
+def test_local_object_upload_and_project_indexes() -> None:
+    client = TestClient(app, headers={"X-User-Id": "p2-index-owner"})
+    project = client.post("/api/v1/projects", json={"name": "P2 indexes"}).json()["item"]["project_id"]
+    asset = client.post(f"/api/v1/projects/{project}/assets", json={"kind": "motion", "display_name": "walk", "original_filename": "walk.npz", "content_type": "application/octet-stream", "license": {"status": "declared", "source": "test"}}).json()
+    version = asset["version"]["asset_version_id"]
+    upload_url = asset["upload"]["upload_url"]
+    uploaded = client.put(upload_url, content=b"motion-bytes", headers={"Content-Type": "application/octet-stream"})
+    assert uploaded.status_code == 200, uploaded.text
+    digest = uploaded.json()["item"]["sha256"]
+    completed = client.post(f"/api/v1/assets/{version}/upload-complete", json={"sha256": digest, "size_bytes": len(b"motion-bytes")})
+    assert completed.status_code == 200
+    detected = client.post("/api/v1/motions/detect", json={"asset_version_id": version})
+    assert detected.status_code == 400
+    assert detected.json()["error"]["code"] == "SCHEMA_INVALID"
+    assets = client.get(f"/api/v1/projects/{project}/assets")
+    assert assets.status_code == 200
+    assert assets.json()["items"][0]["versions"][0]["asset_version_id"] == version
+    runs = client.get(f"/api/v1/projects/{project}/runs")
+    assert runs.status_code == 200
+    assert runs.json()["items"] == []
