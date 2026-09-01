@@ -19,10 +19,17 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from backend.app.infrastructure.robot_registry import LocalRobotRegistry, RobotRegistryError
-
-
+# When executed as ``python tools/robotlab.py`` Python puts ``tools`` (rather
+# than the repository root) on sys.path.  Make project-owned packages
+# importable in that supported operator entry point.
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.app.infrastructure.robot_registry import LocalRobotRegistry, RobotRegistryError
+from backend.app.runtime.registry import RuntimeRegistry
+
+
 COMPOSE = ROOT / "infra" / "compose" / "docker-compose.staging.yml"
 ENV_EXAMPLE = ROOT / ".env.staging.example"
 DEFAULT_RUNTIME_ROOT = ROOT / "runtime"
@@ -141,8 +148,15 @@ def _doctor(args: argparse.Namespace) -> int:
             placeholder = placeholder or any(marker in env("POSTGRES_PASSWORD").lower() for marker in ("replace-with", "changeme", "allrobotrl_dev_only"))
         checks[variable] = {"ok": bool(value) and not placeholder, "configured": bool(value), "placeholder": placeholder, "fix": f"Set {variable} in .env.staging or the server secret manager"}
     runtime_variables = ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH")
+    registration_file = runtime_root / "runtime-registrations.json"
+    try:
+        registration_document = json.loads(registration_file.read_text(encoding="utf-8")) if registration_file.is_file() else {}
+    except (OSError, ValueError, TypeError):
+        registration_document = {}
+    registration_names = {"ISAACLAB_PATH": "isaac_lab", "ISAACSIM_PATH": "isaac_sim", "GMR_PATH": "gmr", "GVHMR_PATH": "gvhmr", "UNITREE_MUJOCO_PATH": "unitree_mujoco"}
     for variable in runtime_variables:
-        value = env(variable)
+        registration = registration_document.get(registration_names[variable], {}) if isinstance(registration_document, dict) else {}
+        value = env(variable) or (str(registration.get("path", "")) if isinstance(registration, dict) else "")
         if variable == "ISAACSIM_PATH" and not value:
             probe = subprocess.run([sys.executable, "-c", "import importlib.util,pathlib; s=importlib.util.find_spec('isaacsim'); print(pathlib.Path(s.origin).resolve().parent.parent if s and s.origin and pathlib.Path(s.origin).resolve().parent.name == 'isaacsim' else '')"], cwd=ROOT, capture_output=True, text=True, check=False)
             value = probe.stdout.strip()
@@ -151,7 +165,7 @@ def _doctor(args: argparse.Namespace) -> int:
     if all(checks[name].get("ok") for name in runtime_variables):
         runtime_env = os.environ.copy()
         runtime_env.update({name: env(name) for name in ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH", "UNITREE_RL_LAB_PATH")})
-        result = subprocess.run([sys.executable, str(runtime_script)], cwd=ROOT, env=runtime_env, capture_output=True, text=True, check=False)
+        result = subprocess.run([sys.executable, str(runtime_script), "--registration", str(registration_file)], cwd=ROOT, env=runtime_env, capture_output=True, text=True, check=False)
         checks["external_runtime"] = {"ok": result.returncode == 0, "required": gpu_required, "details": (result.stdout + result.stderr).strip(), "fix": "Check the pinned Git SHA values in README.md"}
     else:
         checks["external_runtime"] = {"ok": False, "required": gpu_required, "state": "not_ready", "fix": "Configure all external runtime paths, then rerun robotlab doctor"}
@@ -180,13 +194,13 @@ def _init(args: argparse.Namespace) -> int:
     mode = _mode(args)
     runtime_root = _runtime_root(args)
     if mode == "local_file":
-        for directory in (runtime_root, runtime_root / "runs", runtime_root / "artifacts", runtime_root / "scheduler", runtime_root / "processes"):
+        for directory in (runtime_root, runtime_root / "runs", runtime_root / "artifacts", runtime_root / "scheduler", runtime_root / "processes", runtime_root / "external", runtime_root / "motion_pipelines"):
             directory.mkdir(parents=True, exist_ok=True)
         profile = runtime_root / "profile.json"
         if profile.exists() and not args.force:
             print(f"{profile} already exists; use --force to replace it")
             return 1
-        profile.write_text(json.dumps({"schema_version": "local_profile.v1", "mode": "local_file", "runtime_root": str(runtime_root)}, indent=2) + "\n", encoding="utf-8")
+        profile.write_text(json.dumps({"schema_version": "local_profile.v1", "mode": "local_file", "runtime_root": str(runtime_root), "runtime_registration": str(runtime_root / "runtime-registrations.json")}, indent=2) + "\n", encoding="utf-8")
         print(f"Initialized Local File Mode at {runtime_root}")
         return 0
     destination = ROOT / ".env.staging"
@@ -309,6 +323,26 @@ def _robot_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _runtime_registry(args: argparse.Namespace) -> RuntimeRegistry:
+    return RuntimeRegistry(manifest_path=ROOT / ".runtime" / "runtime-manifest.json", registration_path=_runtime_root(args) / "runtime-registrations.json")
+
+
+def _runtime_doctor(args: argparse.Namespace) -> int:
+    report = _runtime_registry(args).doctor(required_only=False)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["status"] == "READY" else 1
+
+
+def _runtime_register(args: argparse.Namespace) -> int:
+    try:
+        check = _runtime_registry(args).register(args.name, path=Path(args.path), python=args.python, revision=args.revision)
+    except Exception as exc:
+        print(f"Runtime registration failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(check.as_dict(), ensure_ascii=False, indent=2))
+    return 0 if check.available else 1
+
+
 def _install(args: argparse.Namespace) -> int:
     command = [sys.executable, "-m", "pip", "install", "-e", "."]
     print("Project-only install (third-party runtimes are never downloaded):")
@@ -354,6 +388,17 @@ def main(argv: list[str] | None = None) -> int:
     robot_add.add_argument("--robot-id", default=None)
     robot_add.add_argument("--runtime-dir", default=None)
     robot_sub.add_parser("list").add_argument("--runtime-dir", default=None)
+    runtime = sub.add_parser("runtime", help="register and inspect external runtime environments")
+    runtime_sub = runtime.add_subparsers(dest="runtime_command", required=True)
+    runtime_doctor = runtime_sub.add_parser("doctor")
+    runtime_doctor.add_argument("--runtime-dir", default=None)
+    runtime_doctor.add_argument("--json", action="store_true")
+    runtime_register = runtime_sub.add_parser("register")
+    runtime_register.add_argument("name", choices=("gmr", "gvhmr", "isaac_lab", "isaac_sim", "unitree_rl_lab", "unitree_mujoco"))
+    runtime_register.add_argument("--path", required=True)
+    runtime_register.add_argument("--python", default=None)
+    runtime_register.add_argument("--revision", default=None)
+    runtime_register.add_argument("--runtime-dir", default=None)
     install = sub.add_parser("install", help="install this repository into the active environment")
     install.add_argument("--dry-run", action="store_true")
     for name, action in (("start", "up"), ("stop", "down"), ("status", "ps")):
@@ -389,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
         return _init(args)
     if args.command == "robot":
         return _robot_add(args) if args.robot_command == "add" else _robot_list(args)
+    if args.command == "runtime":
+        return _runtime_doctor(args) if args.runtime_command == "doctor" else _runtime_register(args)
     if args.command == "install":
         return _install(args)
     if args.command in {"start", "stop", "status", "logs"}:

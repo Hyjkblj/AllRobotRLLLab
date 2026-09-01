@@ -32,7 +32,9 @@ def test_p3_async_train_submission_returns_202() -> None:
     project = client.post("/api/v1/projects", json={"name": "P3 async"}).json()["item"]["project_id"]
     run_response = client.post("/api/v1/runs", json={"project_id": project, "robot": {"robot_id": "unitree_g1_29dof"}, "motion": {"train_motion_sha256": "a" * 64}, "reward_config_sha256": "b" * 64, "training_config_sha256": "c" * 64})
     run_id = run_response.json()["item"]["run_id"]
-    response = client.post(f"/api/v1/runs/{run_id}/train", headers={"X-User-Id": "p3-async-owner", "X-Worker-Id": "p3-worker", "X-Execution-Mode": "async"}, json={"motion_asset_version_id": "motion-1"})
+    # Browser submissions authenticate as project members; worker identity is
+    # only required for internal status/artifact callbacks.
+    response = client.post(f"/api/v1/runs/{run_id}/train", headers={"X-User-Id": "p3-async-owner", "X-Execution-Mode": "async"}, json={"motion_asset_version_id": "motion-1"})
     assert response.status_code == 202, response.text
     assert response.json()["submission"]["status"] == "QUEUED"
     run = client.get(f"/api/v1/runs/{run_id}").json()["item"]

@@ -1,6 +1,74 @@
-# Motion Lab React 工作台
+# AllRobotRLLLab React 工作台
+
+当前前端包含两层：默认打开的 Platform Workbench 负责项目、资源、动作检测、奖励配置、Run 创建和 SSE 监控；MuJoCo Motion Editor 负责真实 G1 网格的动作预览与局部编辑。两者通过明确的按钮切换，平台页面只调用 FastAPI `/api/v1`，编辑器只调用 `/api/mujoco`。
+
+## API 代理
+
+Vite 开发服务将请求分流到两个后端：
+
+```text
+/api/v1/*     → FastAPI Platform API（默认 http://127.0.0.1:8010）
+/api/mujoco/* → MuJoCo Renderer（默认 http://127.0.0.1:8787）
+/uploads/*    → Local File Mode 上传适配器
+/objects/*    → Local File Mode 下载适配器
+```
+
+可通过环境变量覆盖目标地址：
+
+```bash
+VITE_PLATFORM_API_TARGET=http://127.0.0.1:8010 \
+VITE_MUJOCO_API_TARGET=http://127.0.0.1:8787 \
+npm run dev -- --host 127.0.0.1 --port 4173
+```
+
+生产静态部署使用反向代理将 `/api/v1`、`/api/mujoco`、`/uploads` 和 `/objects` 转发到对应服务；浏览器端不写死服务器文件系统路径。
 
 ## 启动
+
+服务器上推荐从仓库根目录使用统一编排脚本。脚本假定当前 shell 已完成
+Conda 初始化，但不会执行 `source conda.sh`、激活环境或安装依赖：
+
+```bash
+cd ~/AllRobotRLLLab
+bash scripts/start_local_stack.sh
+```
+
+默认会在同一个终端启动 FastAPI + Local File worker、MuJoCo 离屏服务和
+React/Vite，并等待三个 HTTP 探活通过。浏览器访问 `http://127.0.0.1:4173`；
+SSH 转发时只需转发 `4173`，前端通过 Vite 代理访问 `8010` 和 `8787`。
+按 `Ctrl-C` 会停止所有进程并保留 `runtime/` 数据。需要在另一个终端停止时：
+
+```bash
+bash scripts/stop_local_stack.sh
+```
+
+环境名和端口可以通过参数或环境变量覆盖。服务器只有一个包含 Node.js 的
+项目环境时，默认配置即可；若 Node.js 安装在 `allrobotrl-platform`：
+
+```bash
+ROBOTLAB_NODE_ENV=allrobotrl-platform bash scripts/start_local_stack.sh
+```
+
+常用覆盖示例：
+
+```bash
+bash scripts/start_local_stack.sh \
+  --api-env unitree_g1_train \
+  --mujoco-env allrobotrl-mujoco \
+  --node-env allrobotrl-mujoco \
+  --runtime-dir "$PWD/runtime" \
+  --api-port 8010 --mujoco-port 8787 --frontend-port 4173
+```
+
+脚本不会自动执行 `npm ci`。首次使用前，请在已初始化 Conda 的 shell 中完成
+依赖安装：
+
+```bash
+conda run -n allrobotrl-mujoco npm ci --prefix frontend-prototype/react-app
+```
+
+日志位于 `${ROBOTLAB_RUNTIME_DIR:-./runtime}/processes/`；端口已被占用时，
+脚本会直接退出并提示先执行停止命令。
 
 在服务器上使用项目的 `allrobotrl-platform` Conda 环境管理 Node.js，不依赖系统 Node.js：
 
@@ -77,6 +145,12 @@ npm run dev -- --host 127.0.0.1
 - 现有 `.pt` 文件主要是 TorchScript policy 或训练 checkpoint，不是动作帧；工作台会识别并展示它们。若 `.pt` 内含形如 `[T, 36]`、`[T, 29]` 的 qpos/action tensor，在环境中安装 Torch 后即可被服务解码。
 
 ## API
+
+Platform Workbench motion processing:
+
+- `POST /api/v1/motions/{asset_version_id}/process` (async by default; use `X-Execution-Mode: sync_smoke` for local verification)
+- `GET /api/v1/motions/{asset_version_id}/pipeline`
+- `GET /api/v1/motion-pipelines/{pipeline_id}`
 
 - `GET /api/mujoco/health`
 - `GET /api/mujoco/model`

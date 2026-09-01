@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.app.application.training_service import TrainingService
+from backend.app.application.motion_pipeline_service import MotionPipelineService
 from backend.app.config.settings import settings
 from backend.app.domain.contracts import Sim2SimThresholds, TrainingConfig
 from backend.app.domain.state_machine import RunStatus
@@ -19,11 +20,33 @@ from backend.app.domain.state_machine import RunStatus
 @dataclass
 class P3TaskExecutor:
     training_service: TrainingService
+    motion_pipeline_service: MotionPipelineService | None = None
 
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = str(payload.get("operation", "")).strip().lower()
-        run_id = str(payload["run_id"])
-        if settings.is_deployed:
+        run_id = str(payload.get("run_id", ""))
+        if operation == "asset_validate":
+            if self.motion_pipeline_service is None:
+                raise RuntimeError("asset validation service is not configured")
+            version = self.motion_pipeline_service.validate_asset_version(str(payload["asset_version_id"]))
+            return {"operation": operation, "asset_version_id": version.asset_version_id, "status": version.status.value, "rejection_code": version.rejection_code}
+        if operation == "motion_process":
+            if self.motion_pipeline_service is None:
+                raise RuntimeError("motion pipeline service is not configured")
+            record = self.motion_pipeline_service.process(str(payload["pipeline_id"]))
+            return {"operation": operation, "pipeline_id": record.pipeline_id, "status": record.status, "output_asset_version_id": record.output_asset_version_id, "error_code": record.error_code}
+        if operation == "retry":
+            config_payload = payload.get("config")
+            if config_payload:
+                config = TrainingConfig.model_validate(config_payload)
+                result = self.training_service.train(run_id=run_id, config=config, worker_id=str(payload.get("worker_id", "local-worker")))
+                return {"operation": operation, "run_id": run_id, "status": "SUCCEEDED", "checkpoint_id": result.checkpoint.checkpoint_id}
+            return {"operation": operation, "run_id": run_id, "status": "ACKNOWLEDGED", "message": "no prior training config was available"}
+        if operation in {"run_validate", "asset_uploading", "cancelled"}:
+            return {"operation": operation, "run_id": str(payload.get("run_id", "")), "status": "ACKNOWLEDGED"}
+        if not run_id:
+            raise ValueError("run_id is required")
+        if settings.is_deployed and (self.training_service is None or getattr(self.training_service, "training_runner", None) is None):
             raise RuntimeError(f"real P3 backend '{settings.p3_backend}' is not registered in this platform image; refusing to run CPU smoke in a deployed environment")
         with self.training_service.run_service.uow:
             run = self.training_service.run_service.uow.runs.get(run_id)
@@ -38,7 +61,7 @@ class P3TaskExecutor:
             if state is not None and state.checkpoint is not None and run.status in {RunStatus.TRAINING_SUCCEEDED, RunStatus.EXPORTING, RunStatus.EXPORTED, RunStatus.SIM2SIM_QUEUED, RunStatus.SIM2SIM_RUNNING, RunStatus.SIM2SIM_PASSED, RunStatus.READY_TO_DOWNLOAD}:
                 return {"operation": operation, "run_id": run_id, "status": "SUCCEEDED", "checkpoint_id": state.checkpoint.checkpoint_id, "replayed": True}
             config = TrainingConfig.model_validate(payload["config"])
-            result = self.training_service.train_smoke(run_id=run_id, config=config, worker_id=str(payload.get("worker_id", "celery-worker")))
+            result = self.training_service.train(run_id=run_id, config=config, worker_id=str(payload.get("worker_id", "celery-worker")))
             return {"operation": operation, "run_id": run_id, "status": "SUCCEEDED", "checkpoint_id": result.checkpoint.checkpoint_id}
         if operation == "export":
             if state is not None and state.bundle is not None and run.status in {RunStatus.EXPORTED, RunStatus.SIM2SIM_QUEUED, RunStatus.SIM2SIM_RUNNING, RunStatus.SIM2SIM_PASSED, RunStatus.READY_TO_DOWNLOAD}:
@@ -68,6 +91,14 @@ def register_p3_tasks(celery_app, executor: P3TaskExecutor) -> None:
     @celery_app.task(name="allrobotrl.p3.sim2sim")
     def sim2sim(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
         return executor.execute({**payload, "operation": "sim2sim"})
+
+    @celery_app.task(name="allrobotrl.motion.process")
+    def motion_process(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "motion_process"})
+
+    @celery_app.task(name="allrobotrl.assets.validate")
+    def asset_validate(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "asset_validate"})
 
 
 __all__ = ["P3TaskExecutor", "register_p3_tasks"]

@@ -50,7 +50,27 @@ def _command(*args: str) -> str | None:
 
 
 def _git_revision(path: Path) -> str | None:
+    root = _command("git", "-C", str(path), "rev-parse", "--show-toplevel")
+    if not root:
+        return None
+    try:
+        if Path(root).resolve() != path.resolve():
+            return None
+    except OSError:
+        return None
     return _command("git", "-C", str(path), "rev-parse", "HEAD")
+
+
+def _source_hash(path: Path) -> str | None:
+    if not path.is_dir():
+        return None
+    digest = hashlib.sha256()
+    for file in sorted(item for item in path.rglob("*") if item.is_file() and ".git" not in item.parts):
+        digest.update(file.relative_to(path).as_posix().encode("utf-8"))
+        with file.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _sha256(path: Path) -> str:
@@ -90,9 +110,16 @@ def _asset_identity(root: Path) -> dict[str, Any]:
 
 
 def collect(root: Path) -> dict[str, Any]:
+    registration_file = root / ".runtime" / "runtime-registrations.json"
+    try:
+        value = json.loads(registration_file.read_text(encoding="utf-8")) if registration_file.is_file() else {}
+        registrations = value if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError):
+        registrations = {}
     external: dict[str, Any] = {}
     for variable, name in PINNED_PATHS.items():
-        raw = os.getenv(variable, "").strip()
+        registration = registrations.get(name, {}) if isinstance(registrations.get(name, {}), dict) else {}
+        raw = os.getenv(variable, "").strip() or str(registration.get("path", "")).strip()
         if variable == "ISAACSIM_PATH" and not raw:
             discovered = _discover_isaacsim()
             if discovered is not None:
@@ -106,6 +133,7 @@ def collect(root: Path) -> dict[str, Any]:
             "path": str(path),
             "exists": path.is_dir(),
             "git_sha": _git_revision(path) if path.is_dir() else None,
+            "source_sha256": _source_hash(path) if path.is_dir() else None,
         }
     packages: dict[str, str | None] = {}
     for package in ("torch", "isaaclab", "unitree-rl-lab", "mujoco", "celery", "fastapi"):

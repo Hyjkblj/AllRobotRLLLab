@@ -3,15 +3,15 @@
 | 项目 | 内容 |
 | --- | --- |
 | 文档版本 | v0.2（版本锁定与风险补充稿） |
-| 文档状态 | Draft，待 P0 评审 |
+| 文档状态 | Draft，历史基线；本地完整项目形态以 v0.3/v0.4 修订章节为准 |
 | 目标用户 | 机器人算法工程师、仿真工程师、研究员、项目导师 |
 | 首个支持机器人 | Unitree G1 29 DoF |
 | 首个训练闭环 | 视频/动作资源 → GVHMR → GMR → 动作预处理 → Isaac Lab/Isaac Sim → MuJoCo sim2sim → 策略包 |
 | 前端 | React + TypeScript |
 | 后端 | Python API + 作业编排，训练执行以 Isaac Lab/Isaac Sim 为底座，参考 `unitree_rl_lab` 的组织形式 |
-| 服务器基线 | Ubuntu 22.04，双 RTX 4090；Isaac Lab `v2.3.0`，Isaac Sim `5.1.0.0`，Python 3.11 |
+| 运行基线 | Windows WSL2 Ubuntu 22.04 与原生 Linux Ubuntu 22.04 均使用 Docker Compose；双 RTX 4090 为本地或后续 worker 资源 |
 
-> 当前实现补充以 [《通用人形机器人RL训练平台开发PRD-v0.3.md》](./通用人形机器人RL训练平台开发PRD-v0.3.md) 的 v0.4 实现基线为准。本文件保留 v0.2 的平台架构和版本约束；前端 UI、真实 MuJoCo 动作工作台、完成度矩阵和验证记录已在 v0.4 中补齐。
+> 当前实现补充以 [《通用人形机器人RL训练平台开发PRD-v0.3.md》](./通用人形机器人RL训练平台开发PRD-v0.3.md) 的 v0.4 实现基线和 [《通用关节机器人 RL 训练平台完整闭环技术方案》](./G1人形机器人RL训练平台完整闭环技术方案.md) 为准。本文件保留 v0.2 的历史平台架构和版本约束；本地完整项目、CLI、Docker、WSL2/Linux、无登录和用户自带机器人资产等新决策不得按本文件早期 Web 描述实现。
 
 ## 1. 产品概述
 

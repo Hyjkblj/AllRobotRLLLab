@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import quote
@@ -77,11 +78,18 @@ class LocalObjectStore:
         safe_key = validate_object_key(key)
         if not self._target_for_key(safe_key).is_file():
             raise ObjectStoreError(f"object not found: {safe_key}")
-        return f"/objects/{quote(safe_key, safe='/')}?expires={int(expires_seconds)}"
+        return f"/api/v1/objects/{quote(safe_key, safe='/')}?expires={int(time.time()) + int(expires_seconds)}"
 
     def presigned_put(self, key: str, *, expires_seconds: int = 900, content_type: str | None = None) -> str:
         safe_key = validate_object_key(key)
-        return f"/uploads/{quote(safe_key, safe='/')}?expires={int(expires_seconds)}"
+        return f"/api/v1/uploads/{quote(safe_key, safe='/')}?expires={int(time.time()) + int(expires_seconds)}"
+
+    def resolve_path(self, key: str) -> Path:
+        """Resolve a stored object for local HTTP adapters and workers."""
+        safe_key = validate_object_key(key)
+        target = self._target_for_key(safe_key).resolve()
+        target.relative_to(self.root)
+        return target
 
     def stat(self, key: str) -> dict[str, str | int]:
         safe_key = validate_object_key(key)
@@ -90,6 +98,14 @@ class LocalObjectStore:
         if not target.is_file():
             raise ObjectStoreError(f"object not found: {safe_key}")
         return {"key": safe_key, "sha256": hashlib.sha256(target.read_bytes()).hexdigest(), "size_bytes": target.stat().st_size}
+
+    def download_file(self, key: str, destination: Path) -> Path:
+        """Materialize an object for an external worker process."""
+        source = self.resolve_path(key)
+        target = Path(destination).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        return target
 
     def _target_for_key(self, safe_key: str, digest: str | None = None) -> Path:
         if self.content_addressed:
@@ -133,7 +149,7 @@ class MinioObjectStore:
         with source.open("rb") as stream:
             while chunk := stream.read(1024 * 1024):
                 digest.update(chunk)
-        self.client.fput_object(self.bucket, safe_key, str(source), content_type=content_type or "application/octet-stream")
+        self.client.fput_object(self.bucket, safe_key, str(source), content_type=content_type or "application/octet-stream", metadata={"X-Amz-Meta-Sha256": digest.hexdigest()})
         return {"key": safe_key, "sha256": digest.hexdigest(), "size_bytes": source.stat().st_size, "content_type": content_type or "application/octet-stream"}
 
     def presigned_get(self, key: str, *, expires_seconds: int = 900) -> str:
@@ -148,6 +164,16 @@ class MinioObjectStore:
         # S3 ETags are not SHA-256 for multipart uploads. Server-side hash is
         # completed by the asset validation worker and then persisted.
         return {"key": safe_key, "size_bytes": int(metadata.size), "sha256": str(metadata.metadata.get("X-Amz-Meta-Sha256", ""))}
+
+    def download_file(self, key: str, destination: Path) -> Path:
+        safe_key = validate_object_key(key)
+        target = Path(destination).expanduser().resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.client.fget_object(self.bucket, safe_key, str(target))
+        except Exception as exc:
+            raise ObjectStoreError(f"object download failed: {safe_key}") from exc
+        return target
 
 
 __all__ = ["LocalObjectStore", "MinioObjectStore", "ObjectStoreError", "validate_object_key"]

@@ -19,12 +19,18 @@ from adapters.unitree_g1_29dof import UnitreeG1Adapter
 from backend.app.application.artifact_service import ArtifactService
 from backend.app.application.run_service import RunService
 from backend.app.application.training_service import TrainingService
+from backend.app.application.asset_service import AssetService
+from backend.app.application.outbox_dispatcher import OutboxDispatcher
+from backend.app.application.motion_pipeline_service import MotionPipelineService, MotionPipelineStore
+from backend.app.adapters.motion import MotionSourceRegistry
+from backend.app.application.motion_editor import MotionEditor
 from backend.app.config.settings import settings
 from backend.app.infrastructure.local import build_object_store
 from backend.app.infrastructure.local_file import LocalFileUnitOfWork
 from backend.app.infrastructure.queue import LocalFileTaskDispatcher
 from backend.app.infrastructure.scheduler import LocalRunRecovery
 from backend.app.workers.p3_tasks import P3TaskExecutor
+from backend.app.runtime.factory import build_runtime_adapters
 
 
 def build_executor() -> tuple[LocalFileTaskDispatcher, P3TaskExecutor]:
@@ -35,16 +41,34 @@ def build_executor() -> tuple[LocalFileTaskDispatcher, P3TaskExecutor]:
     object_store = build_object_store(settings)
     artifact_service = ArtifactService(uow, object_store)
     adapter = UnitreeG1Adapter(repository_root=settings.repository_root)
-    training_service = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store)
-    return LocalFileTaskDispatcher(settings.runtime_root / "scheduler"), P3TaskExecutor(training_service)
+    runtime_adapters = build_runtime_adapters(settings, workspace=settings.runtime_root / "external")
+    training_runner = runtime_adapters["isaac"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab"} else None
+    sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "unitree_mujoco"} else None
+    training_service = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter)
+    motion_pipeline_service = MotionPipelineService(
+        uow=uow,
+        object_store=object_store,
+        robot_adapter=adapter,
+        motion_registry=MotionSourceRegistry(),
+        motion_editor=MotionEditor(adapter.get_spec(), ik_solver=adapter.create_ik_solver()),
+        asset_service=AssetService(uow, object_store),
+        store=MotionPipelineStore(settings.runtime_root / "motion_pipelines"),
+        kinematics_compiler=runtime_adapters["compiler"],
+        gvhmr_runner=runtime_adapters["gvhmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
+        gmr_runner=runtime_adapters["gmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
+    )
+    return LocalFileTaskDispatcher(settings.runtime_root / "scheduler"), P3TaskExecutor(training_service, motion_pipeline_service)
 
 
 def run(*, worker_id: str = "local-worker", poll_interval: float = 1.0, once: bool = False) -> int:
     dispatcher, executor = build_executor()
+    outbox = OutboxDispatcher(executor.training_service.run_service.uow, dispatcher)
     dispatcher.recover_running()
     LocalRunRecovery(settings.runtime_root).reconcile(executor.training_service.run_service.uow)
     while True:
-        envelope = dispatcher.claim(worker_id=worker_id, queues=("cpu", "isaac-gpu", "sim2sim-gpu", "motion-cpu"))
+        # Move committed API events into the durable queue before claiming a job.
+        outbox.dispatch(limit=50)
+        envelope = dispatcher.claim(worker_id=worker_id, queues=("cpu", "asset-io", "isaac-gpu", "sim2sim-gpu", "motion-cpu", "motion-gpu", "maintenance"))
         if envelope is None:
             if once:
                 return 0
@@ -66,6 +90,18 @@ def run(*, worker_id: str = "local-worker", poll_interval: float = 1.0, once: bo
 
 def _operation_for_task(task: str) -> str:
     value = task.rsplit(".", 1)[-1].strip().lower()
+    if task == "assets.validate" or (value == "validate" and task.startswith("allrobotrl.assets")):
+        return "asset_validate"
+    if task == "assets.uploading":
+        return "asset_uploading"
+    if task == "allrobotrl.motion.process" or value == "process":
+        return "motion_process"
+    if task == "runs.created":
+        return "run_validate"
+    if task == "runs.retry":
+        return "retry"
+    if task == "runs.cancelled":
+        return "cancelled"
     if value not in {"train", "export", "sim2sim"}:
         raise ValueError(f"unsupported local task: {task}")
     return value

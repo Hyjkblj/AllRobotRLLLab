@@ -66,6 +66,12 @@ class RunService:
         with self.uow:
             return self.uow.projects.list_for_user(actor.user_id)
 
+    def list_runs(self, *, actor: Actor, project_id: str) -> list[RunRecord]:
+        with self.uow:
+            self._project_or_error(project_id)
+            self._require_member(project_id, actor.user_id, ProjectRole.VIEWER)
+            return self.uow.runs.list_for_project(project_id)
+
     def add_member(self, *, project_id: str, actor: Actor, user_id: str, role: ProjectRole) -> ProjectMember:
         with self.uow:
             self._project_or_error(project_id)
@@ -173,21 +179,31 @@ class RunService:
         with self.uow:
             run = self._run_or_error(run_id)
             self._require_member(run.project_id, actor.user_id, ProjectRole.EDITOR)
-            if run.status != RunStatus.FAILED:
-                raise RunServiceError("RUN_NOT_RETRYABLE", "only FAILED runs can be retried automatically", status_code=409)
-            try:
-                retry_status = transition(run.status, RunStatus.TRAINING_PREPARING)
-            except InvalidTransition as exc:
-                raise RunServiceError("RUN_NOT_RETRYABLE", str(exc), status_code=409) from exc
+            if run.status not in {RunStatus.FAILED, RunStatus.CANCELLED}:
+                raise RunServiceError("RUN_NOT_RETRYABLE", "only FAILED or CANCELLED runs can be retried", status_code=409)
+            if run.status == RunStatus.CANCELLED:
+                # Cancellation is terminal for the current attempt, but the
+                # immutable manifest can safely start a fresh attempt.
+                retry_status = RunStatus.TRAINING_PREPARING
+            else:
+                try:
+                    retry_status = transition(run.status, RunStatus.TRAINING_PREPARING)
+                except InvalidTransition as exc:
+                    raise RunServiceError("RUN_NOT_RETRYABLE", str(exc), status_code=409) from exc
             attempts = self.uow.runs.list_attempts(run_id)
             timestamp = utc_now()
             attempt = AttemptRecord(attempt_id=str(uuid.uuid4()), run_id=run_id, number=len(attempts) + 1, status=retry_status, created_at=timestamp)
-            updated_run = run.model_copy(update={"status": retry_status, "current_attempt_id": attempt.attempt_id, "updated_at": timestamp})
+            updated_manifest = run.manifest.model_copy(update={"attempt_id": attempt.attempt_id, "manifest_sha256": None}).freeze()
+            updated_run = run.model_copy(update={"status": retry_status, "current_attempt_id": attempt.attempt_id, "manifest": updated_manifest, "updated_at": timestamp})
             self.uow.runs.create_attempt(attempt)
             self.uow.runs.update(updated_run)
             self._emit(updated_run, attempt, event_type="status", stage="retry", message="Retry attempt created", payload={"status": retry_status.value, "attempt_number": attempt.number})
             self._audit(actor, run.project_id, "run.retried", "run", run_id, {"attempt_id": attempt.attempt_id, "attempt_number": attempt.number})
-            self.uow.outbox.add(OutboxEvent(event_id=str(uuid.uuid4()), topic="runs.retry", key=attempt.attempt_id, payload={"run_id": run_id, "attempt_id": attempt.attempt_id, "stage": "training_prepare"}, created_at=timestamp))
+            retry_payload = {"run_id": run_id, "attempt_id": attempt.attempt_id, "stage": "training_prepare"}
+            prior_state = self.uow.p3_states.get(run_id)
+            if prior_state is not None and prior_state.training_config is not None:
+                retry_payload["config"] = prior_state.training_config.model_dump(mode="json")
+            self.uow.outbox.add(OutboxEvent(event_id=str(uuid.uuid4()), topic="runs.retry", key=attempt.attempt_id, payload=retry_payload, created_at=timestamp))
             return updated_run, attempt
 
     def transition_run(self, *, run_id: str, target: RunStatus, actor: Actor | None = None, stage: str | None = None, message: str = "") -> RunRecord:

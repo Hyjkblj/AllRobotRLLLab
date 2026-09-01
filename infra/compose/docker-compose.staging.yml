@@ -70,6 +70,7 @@ services:
         condition: service_healthy
     environment:
       APP_ENV: staging
+      PLATFORM_ROLE: api
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
     command: ["python", "-c", "import os; from pathlib import Path; from backend.app.infrastructure.postgres import PostgresDatabase; PostgresDatabase(os.environ['DATABASE_URL']).apply_migrations(Path('/app/infra/migrations'))"]
 
@@ -90,6 +91,7 @@ services:
         condition: service_completed_successfully
     environment:
       APP_ENV: staging
+      PLATFORM_ROLE: worker-cpu
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
@@ -124,6 +126,7 @@ services:
         condition: service_completed_successfully
     environment:
       APP_ENV: staging
+      PLATFORM_ROLE: worker-gpu
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
@@ -136,7 +139,7 @@ services:
       WORKER_AUTH_TOKEN: ${WORKER_AUTH_TOKEN:?WORKER_AUTH_TOKEN must be set}
     volumes:
       - staging-runtime:/app/.runtime
-    command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "cpu"]
+    command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "cpu,asset-io,motion-cpu"]
 
   worker-gpu:
     profiles: ["gpu"]
@@ -169,6 +172,7 @@ services:
       GVHMR_PATH: /opt/GVHMR
       UNITREE_MUJOCO_PATH: /opt/unitree_mujoco
       UNITREE_RL_LAB_PATH: /opt/unitree_rl_lab
+      G1_MJCF_PATH: /opt/GMR/assets/unitree_g1/g1_mocap_29dof.xml
     volumes:
       - staging-runtime:/app/.runtime
       - ${ISAACLAB_PATH:-/opt/IsaacLab}:/opt/IsaacLab:ro
@@ -178,7 +182,7 @@ services:
       - ${UNITREE_MUJOCO_PATH:-/opt/unitree_mujoco}:/opt/unitree_mujoco:ro
       - ${UNITREE_RL_LAB_PATH:-/opt/unitree_rl_lab}:/opt/unitree_rl_lab:ro
     gpus: all
-    command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "isaac-gpu,sim2sim-gpu", "--concurrency=1"]
+    command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "isaac-gpu,sim2sim-gpu,motion-gpu", "--concurrency=1"]
 
 volumes:
   staging-postgres:

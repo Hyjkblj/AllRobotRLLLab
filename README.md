@@ -54,7 +54,12 @@ npm ci
 npm run dev -- --host 127.0.0.1 --port 4173
 ```
 
-API 地址：`http://127.0.0.1:8000/api/v1/health`。默认开发模式是无数据库的 Local File Mode，运行数据写入 `runtime/`，不需要 Docker、PostgreSQL、Redis 或 MinIO。需要团队共享或远程 worker 时，再显式使用 Compose Mode。详细边界、接口和后续 P1/P2 工作见 [docs/P0实现说明.md](docs/P0实现说明.md)、[docs/P2实现说明.md](docs/P2实现说明.md) 与方案文档。
+单独执行 `robotlab start --mode local_file` 时 API 默认监听
+`http://127.0.0.1:8000/api/v1/health`；统一启动脚本使用 `8010`，并同时编排
+MuJoCo `8787` 和 React `4173`。默认开发模式是无数据库的 Local File Mode，
+运行数据写入 `runtime/`，不需要 Docker、PostgreSQL、Redis 或 MinIO。需要团队
+共享或远程 worker 时，再显式使用 Compose Mode。详细边界、接口和后续 P1/P2
+工作见 [docs/P0实现说明.md](docs/P0实现说明.md)、[docs/P2实现说明.md](docs/P2实现说明.md) 与方案文档。
 
 运维入口安装项目自身代码后可直接使用 `robotlab`（也可执行 `python -m tools.robotlab`）：
 
@@ -69,6 +74,19 @@ robotlab stop
 ```
 
 `doctor` 只检查并给出缺失组件的安装/配置指引，不会自动修改操作系统、Docker、Conda 或第三方运行时。
+
+服务器上需要同时运行 API、Local File worker、MuJoCo 服务和 React 前端时，
+可以在已初始化 Conda 的同一个终端执行统一编排脚本：
+
+```bash
+bash scripts/start_local_stack.sh
+```
+
+默认环境为 `unitree_g1_train`（API/worker）和 `allrobotrl-mujoco`
+（MuJoCo/Node），端口为 `8010`、`8787`、`4173`。脚本不初始化 Conda、
+不安装依赖，也不下载第三方运行时；按 `Ctrl-C` 或另一个终端执行
+`bash scripts/stop_local_stack.sh` 会停止服务并保留 `runtime/` 数据。若
+Node.js 位于其他项目环境，可设置 `ROBOTLAB_NODE_ENV` 覆盖。
 
 Local File Mode 的运行目录可以通过 `ROBOTLAB_RUNTIME_DIR` 指定；`robotlab start --mode local_file` 会启动本地 API 和持久化任务 worker。切换到 PostgreSQL/Redis/MinIO 时使用 `robotlab init --mode compose` 和 staging Compose 配置。
 

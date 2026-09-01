@@ -96,6 +96,10 @@ class InMemoryRunRepository:
         with self._lock:
             return self._runs.get(run_id)
 
+    def list_for_project(self, project_id: str) -> list[RunRecord]:
+        with self._lock:
+            return sorted((run for run in self._runs.values() if run.project_id == project_id), key=lambda run: run.updated_at, reverse=True)
+
     def update(self, run: RunRecord) -> RunRecord:
         with self._lock:
             if run.run_id not in self._runs:
@@ -212,6 +216,10 @@ class InMemoryAssetRepository:
     def get(self, asset_id: str) -> AssetRecord | None:
         with self._lock:
             return self._assets.get(asset_id)
+
+    def list_for_project(self, project_id: str) -> list[AssetRecord]:
+        with self._lock:
+            return sorted((asset for asset in self._assets.values() if asset.project_id == project_id), key=lambda asset: asset.created_at, reverse=True)
 
     def version(self, asset_version_id: str) -> AssetVersion | None:
         with self._lock:

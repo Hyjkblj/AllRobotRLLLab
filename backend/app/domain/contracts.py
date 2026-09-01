@@ -27,6 +27,7 @@ class SchemaVersion(StrEnum):
     RETARGET_MOTION = "retarget_motion.v1"
     TRAIN_MOTION = "train_motion_npz.v1"
     MOTION_EDIT = "motion_edit.v1"
+    MOTION_PIPELINE = "motion_pipeline.v1"
     REWARD_CONFIG = "reward_config.v1"
     TRAINING_CONFIG = "training_config.v1"
     RUN_MANIFEST = "run_manifest.v1"
@@ -249,7 +250,7 @@ class TaskSubmission(ContractModel):
     task_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
-    operation: Literal["train", "export", "sim2sim"]
+    operation: Literal["train", "export", "sim2sim", "motion_process", "asset_validate"]
     queue: str = Field(min_length=1)
     status: Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED"] = "QUEUED"
     idempotency_key: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -536,6 +537,41 @@ class MotionQualityReport(ContractModel):
     compiler_version: str = Field(min_length=1)
 
 
+class MotionPipelineStage(ContractModel):
+    """Durable status for one stage of the motion processing pipeline."""
+
+    name: Literal["detect", "retarget", "edit", "compile", "publish"]
+    status: Literal["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "SKIPPED"] = "PENDING"
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_seconds: float | None = Field(default=None, ge=0)
+    message: str | None = None
+    error_code: str | None = None
+
+
+class MotionPipelineRecord(ContractModel):
+    """Server-side record tying source, processing stages and outputs together."""
+
+    schema_version: Literal[SchemaVersion.MOTION_PIPELINE] = SchemaVersion.MOTION_PIPELINE
+    pipeline_id: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    source_asset_version_id: str = Field(min_length=1)
+    status: Literal["QUEUED", "RUNNING", "READY", "FAILED"] = "QUEUED"
+    stages: list[MotionPipelineStage] = Field(min_length=1)
+    source_descriptor: SourceMotionDescriptor | None = None
+    edit_config: MotionEditConfig | None = None
+    retarget_motion: RetargetMotion | None = None
+    train_motion: TrainMotionNPZ | None = None
+    output_asset_version_id: str | None = None
+    output_object_key: str | None = None
+    quality: MotionQualityReport | None = None
+    task_id: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: str = Field(min_length=1)
+    updated_at: str = Field(min_length=1)
+
+
 class RewardConfigVersion(ContractModel):
     """Immutable server-side version of a validated reward configuration."""
 
@@ -713,13 +749,14 @@ class P3RunState(ContractModel):
 
 
 RunRecord.model_rebuild()
+MotionPipelineRecord.model_rebuild()
 P3RunState.model_rebuild()
 
 
 __all__ = [
     "Actor", "ActuationSpec", "ActionConfig", "ArrayField", "ArtifactRecord", "AssetKind", "AssetRecord", "AssetStatus", "AssetVersion", "AssetVersionStatus", "AttemptRecord", "AuditEvent", "CheckpointRecord", "ControlConfig", "DomainRandomization", "ExportFile", "ExportMetadata",
     "GlobalTransform", "JointOffset", "JointSpec", "LicenseInfo", "MotionArrayMeta",
-    "MetricPoint", "MotionEditConfig", "MotionEditVersion", "MotionQuality", "MotionQualityReport", "OutboxEvent", "P3RunState", "PPOConfig", "PolicyBundle", "ProjectMember", "ProjectRecord", "ProjectRole", "ProjectStatus", "ResourceRequest", "RetargetMotion", "TaskSubmission",
+    "MetricPoint", "MotionEditConfig", "MotionEditVersion", "MotionPipelineRecord", "MotionPipelineStage", "MotionQuality", "MotionQualityReport", "OutboxEvent", "P3RunState", "PPOConfig", "PolicyBundle", "ProjectMember", "ProjectRecord", "ProjectRole", "ProjectStatus", "ResourceRequest", "RetargetMotion", "TaskSubmission",
     "RewardConfig", "RewardConfigVersion", "RewardTerm", "RewardTermSpec", "RobotSpec", "RunEvent", "RunManifest", "RunRecord", "RunStatus", "RuntimeVersions", "SeedEvaluation", "Sim2SimReport", "Sim2SimThresholds", "UploadSession",
     "SchemaVersion", "SourceMotionDescriptor", "TrainMotionNPZ", "TrainingConfig", "ValidationIssue",
     "ValidationResult", "ValidationSeverity",

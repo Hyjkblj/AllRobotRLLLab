@@ -113,6 +113,12 @@ class AssetService:
             self._require_member(asset.project_id, actor.user_id, ProjectRole.VIEWER)
             return asset, self.uow.assets.list_versions(asset_id)
 
+    def list_assets(self, *, actor: Actor, project_id: str) -> list[tuple[AssetRecord, list[AssetVersion]]]:
+        with self.uow:
+            self._require_member(project_id, actor.user_id, ProjectRole.VIEWER)
+            assets = self.uow.assets.list_for_project(project_id)
+            return [(asset, self.uow.assets.list_versions(asset.asset_id)) for asset in assets]
+
     def _require_member(self, project_id: str, user_id: str, minimum: ProjectRole) -> None:
         member = self.uow.projects.member(project_id, user_id)
         if member is None:

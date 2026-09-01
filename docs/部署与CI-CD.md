@@ -39,7 +39,29 @@ MINIO_BUCKET=allrobotrl
 API_PORT=8000
 ```
 
-## 3. Staging 部署
+## 3. 单机无数据库基线启动
+
+在没有 Docker、PostgreSQL、Redis 或 MinIO 的服务器上，可使用 Local File
+Mode 完成前端/API/MuJoCo 基线验收。Conda 初始化和依赖安装必须由运维步骤
+提前完成；编排脚本只选择已存在的环境并启动进程：
+
+```bash
+cd ~/AllRobotRLLLab
+bash scripts/start_local_stack.sh
+```
+
+默认使用 `unitree_g1_train` 启动 FastAPI 和 Local File worker，使用
+`allrobotrl-mujoco` 启动 MuJoCo 与 Node/Vite。若 Node.js 在
+`allrobotrl-platform`，设置 `ROBOTLAB_NODE_ENV=allrobotrl-platform`。
+脚本会等待 `8010/api/v1/health`、`8787/api/mujoco/health` 和 `4173/` 探活，
+并将日志写入 `runtime/processes/`。按 `Ctrl-C` 或执行
+`bash scripts/stop_local_stack.sh` 停止服务；运行数据不会删除。
+
+此基线只验证现有 API 编排、MuJoCo 渲染和前端代理，不代表真实 GVHMR/GMR
+恢复或 Isaac Lab/RSL-RL GPU 训练已接入。真实训练仍按下文 staging/GPU worker
+流程执行。
+
+## 4. Staging 部署
 
 服务器准备 Docker Engine、Compose v2 和外部第三方运行时后，在仓库根目录执行。当前 Compose 覆盖 API、Celery、PostgreSQL、Redis 和 MinIO；`frontend-prototype` 的 MuJoCo 服务仍需外部挂载 G1 资产，待阶段 F 接入正式 API 后再纳入同一生产入口：
 
@@ -67,7 +89,7 @@ python scripts/collect_runtime_manifest.py --strict --output .runtime/runtime-ma
 
 验证 worker 重启恢复：提交一个 async train 后重启 worker，任务重新投递或重试时应保持相同 checkpoint id；随后从新的 worker 进程提交 export/sim2sim，不能依赖旧 API 进程内存。对应的本地契约测试是 `test_p3_state_survives_training_service_recreation` 和 `test_worker_replay_is_idempotent_after_completed_train`。
 
-## 4. 生产 GPU Worker
+## 5. 生产 GPU Worker
 
 GPU Worker 与 API 镜像分开发布。它需要额外的 NVIDIA Container Toolkit、GPU 驱动和外部只读挂载：
 
@@ -106,7 +128,7 @@ python scripts/probe_isaacsim.py --frames 5 --output .runtime/isaacsim-probe.jso
 为 USD；因此该任务不需要本地 `G1_USD_PATH`。只有使用
 `UnitreeUsdFileCfg` 的任务才需要配置本地或可访问的 USD 资产。
 
-## 5. 发布和回滚
+## 6. 发布和回滚
 
 - 镜像使用 Git commit SHA 标记；`latest` 只允许用于本地开发。
 - 发布前保留上一版本镜像和数据库备份。
