@@ -11,23 +11,21 @@ import importlib.util
 import hashlib
 from pathlib import Path
 
+# Support the documented ``python scripts/...`` entry point, where Python's
+# import root is the scripts directory rather than the repository root.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-REQUIRED_PATHS = {
-    "ISAACLAB_PATH": "Isaac Lab",
-    "ISAACSIM_PATH": "Isaac Sim",
-    "GMR_PATH": "GMR",
-    "GVHMR_PATH": "GVHMR",
-    "UNITREE_MUJOCO_PATH": "Unitree MuJoCo",
-}
+from backend.app.runtime.profiles import RUNTIME_PROFILES, infer_profile, runtime_names  # noqa: E402
+from backend.app.runtime.registry import RuntimeRegistry  # noqa: E402
 
-EXPECTED_REVISIONS = {
-    "ISAACLAB_PATH": "3c6e67bb5",
-    "GMR_PATH": "bb1bbe4",
-    "GVHMR_PATH": "6ec3ca3",
-    "UNITREE_MUJOCO_PATH": "ae6a840",
-}
 
-OPTIONAL_PATHS = {"UNITREE_RL_LAB_PATH": "Unitree RL Lab"}
+# Compatibility exports for operators/scripts that imported these names.  The
+# source of truth is RuntimeRegistry.SPECS plus runtime profiles below.
+REQUIRED_PATHS = {spec.path_env: spec.name for spec in RuntimeRegistry.SPECS}
+EXPECTED_REVISIONS = {spec.path_env: spec.revision for spec in RuntimeRegistry.SPECS if spec.revision}
+OPTIONAL_PATHS = {spec.path_env: spec.name for spec in RuntimeRegistry.SPECS if spec.name not in runtime_names("gpu")}
 
 
 def discover_isaacsim_path() -> Path | None:
@@ -73,7 +71,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--registration", type=Path, default=Path(".runtime/runtime-registrations.json"), help="runtime registration file created by robotlab runtime register")
+    parser.add_argument("--profile", choices=tuple(RUNTIME_PROFILES), default=None, help="runtime requirement profile; defaults to RUNTIME_PROFILE or the process role/backend")
     args = parser.parse_args()
+    explicit_profile = args.profile or os.getenv("RUNTIME_PROFILE", "").strip().lower() or None
+    has_process_context = bool(os.getenv("PLATFORM_ROLE", "").strip() or os.getenv("P3_BACKEND", "").strip())
+    profile = explicit_profile or ("gpu" if not has_process_context else infer_profile(
+        platform_role=os.getenv("PLATFORM_ROLE", "api").strip().lower(),
+        p3_backend=os.getenv("P3_BACKEND", "fake_smoke").strip().lower(),
+    ))
+    required_names = set(runtime_names(profile))
     registrations: dict = {}
     if args.registration.is_file():
         try:
@@ -83,17 +89,18 @@ def main() -> int:
             registrations = {}
     failures: list[str] = []
     results: dict[str, dict[str, str | bool | None]] = {}
-    for variable, label in REQUIRED_PATHS.items():
-        registration_name = variable.removesuffix("_PATH").lower()
-        registration_name = {"isaaclab": "isaac_lab", "isaacsim": "isaac_sim", "unitree_mujoco": "unitree_mujoco"}.get(registration_name, registration_name)
-        registration = registrations.get(registration_name, {}) if isinstance(registrations.get(registration_name, {}), dict) else {}
+    for spec in RuntimeRegistry.SPECS:
+        variable = spec.path_env
+        label = spec.name
+        registration = registrations.get(spec.name, {}) if isinstance(registrations.get(spec.name, {}), dict) else {}
         raw = os.getenv(variable, "").strip() or str(registration.get("path", "")).strip()
         if variable == "ISAACSIM_PATH" and not raw:
             discovered = discover_isaacsim_path()
             if discovered is not None:
                 raw = str(discovered)
         if not raw:
-            failures.append(f"{variable} is not set ({label})")
+            if spec.name in required_names:
+                failures.append(f"{variable} is not set ({label}; profile={profile})")
             results[variable] = {"label": label, "configured": False, "path": None, "revision": None}
             continue
         path = Path(raw).expanduser().resolve()
@@ -102,26 +109,15 @@ def main() -> int:
             results[variable] = {"label": label, "configured": True, "path": str(path), "revision": None}
             continue
         revision = git_revision(path)
-        expected = str(registration.get("revision", "")).strip() or EXPECTED_REVISIONS.get(variable)
+        expected = str(registration.get("revision", "")).strip() or spec.revision
         if expected and expected.startswith("content:"):
             revision = "content:" + source_hash(path)
         if expected and not (revision == expected or revision.startswith(expected)):
             failures.append(f"{variable} revision mismatch: expected {expected}, got {revision}")
         results[variable] = {"label": label, "configured": True, "path": str(path), "revision": revision, "expected": expected}
 
-    for variable, label in OPTIONAL_PATHS.items():
-        raw = os.getenv(variable, "").strip()
-        if not raw:
-            results[variable] = {"label": label, "configured": False, "path": None, "revision": None}
-            continue
-        path = Path(raw).expanduser().resolve()
-        revision = git_revision(path) if path.is_dir() else None
-        results[variable] = {"label": label, "configured": path.is_dir(), "path": str(path), "revision": revision}
-        if not path.is_dir():
-            failures.append(f"{variable} does not point to a directory: {path}")
-
     if args.json:
-        print(json.dumps({"status": "ok" if not failures else "failed", "checks": results, "failures": failures}, ensure_ascii=False, indent=2))
+        print(json.dumps({"status": "ok" if not failures else "failed", "profile": profile, "checks": results, "failures": failures}, ensure_ascii=False, indent=2))
     else:
         for item in results.values():
             if item.get("configured"):

@@ -124,7 +124,7 @@ class TorchPolicyExporter:
         return ExportResult(metadata=metadata, files=files, output_dir=output_dir)
 
 
-def build_policy_bundle(*, output_dir: Path, run_id: str, attempt_id: str, robot_id: str, observation_dim: int, action_dim: int, export: ExportResult, manifest: dict, sim2sim_report: dict | None = None) -> PolicyBundle:
+def build_policy_bundle(*, output_dir: Path, run_id: str, attempt_id: str, robot_id: str, observation_dim: int, action_dim: int, export: ExportResult, manifest: dict, sim2sim_report: dict | None = None, control_dt: float | None = None, scene_id: str | None = None, algorithm: str = "rsl_rl_ppo") -> PolicyBundle:
     output_dir.mkdir(parents=True, exist_ok=True)
     for exported_file in export.files:
         source = export.output_dir / exported_file.path
@@ -135,9 +135,11 @@ def build_policy_bundle(*, output_dir: Path, run_id: str, attempt_id: str, robot
     manifest_dir = output_dir / "manifest"
     params_dir.mkdir(exist_ok=True)
     manifest_dir.mkdir(exist_ok=True)
-    (params_dir / "deploy.yaml").write_text(f"robot_id: {robot_id}\ncontrol_dt: 0.02\naction_dim: {action_dim}\n", encoding="utf-8")
-    (params_dir / "env.yaml").write_text(f"observation_dim: {observation_dim}\nscene_id: g1_flat\n", encoding="utf-8")
-    (params_dir / "agent.yaml").write_text("algorithm: rsl_rl_ppo\n", encoding="utf-8")
+    if control_dt is None or scene_id is None:
+        raise ExportError("BUNDLE_CONFIG_INCOMPLETE", "control_dt and scene_id must be supplied by the selected robot/task adapter")
+    (params_dir / "deploy.yaml").write_text(f"robot_id: {robot_id}\ncontrol_dt: {control_dt}\naction_dim: {action_dim}\n", encoding="utf-8")
+    (params_dir / "env.yaml").write_text(f"observation_dim: {observation_dim}\nscene_id: {scene_id}\n", encoding="utf-8")
+    (params_dir / "agent.yaml").write_text(f"algorithm: {algorithm}\n", encoding="utf-8")
     (params_dir / "normalization.json").write_text(json.dumps({"mean": [0.0] * observation_dim, "std": [1.0] * observation_dim}, separators=(",", ":")), encoding="utf-8")
     (params_dir / "action_scale.json").write_text(json.dumps({"scale": export.metadata.action_scale}), encoding="utf-8")
     (manifest_dir / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")

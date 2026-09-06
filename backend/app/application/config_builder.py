@@ -1,4 +1,4 @@
-"""Generate a reviewable G1 imitation training configuration."""
+"""Generate a reviewable imitation training configuration from RobotSpec."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.app.domain.contracts import RobotSpec, TrainMotionNPZ, TrainingConfig
+from backend.app.application.task_catalog import TaskSpec
 from .reward_catalog import default_reward_config
 
 
@@ -16,6 +17,7 @@ class GeneratedImitationConfig:
     derived: dict[str, Any]
     defaults: dict[str, Any]
     user_overrides: dict[str, Any]
+    robot_id: str
     builder_version: str = "imitation-config-builder.v1"
 
     def as_dict(self) -> dict[str, Any]:
@@ -28,7 +30,7 @@ class GeneratedImitationConfig:
             "user_overrides": self.user_overrides,
             "builder_version": self.builder_version,
             "config": self.config.model_dump(mode="json"),
-            "reward_config": default_reward_config().model_dump(mode="json"),
+            "reward_config": default_reward_config(robot_id=self.robot_id, task_id=self.config.task_id).model_dump(mode="json"),
         }
 
 
@@ -37,6 +39,7 @@ def build_imitation_config(
     robot: RobotSpec,
     *,
     user_overrides: dict[str, Any] | None = None,
+    task: TaskSpec | None = None,
 ) -> GeneratedImitationConfig:
     overrides = user_overrides or {}
     motion_duration = motion.frame_count / motion.fps
@@ -47,9 +50,13 @@ def build_imitation_config(
     observation_dim = robot.dof * 2 + 3 + 3 + robot.dof + robot.dof
     observation_dim *= 3
     observation_dim += 6 + 4
+    task_id = task.task_id if task else (robot.isaac_task_ids[0] if robot.isaac_task_ids else "")
+    scene_id = task.scene_id if task else getattr(robot, "default_scene_id", "")
+    if not task_id or not scene_id:
+        raise ValueError("a TaskSpec (or RobotSpec task and default scene metadata) is required")
     config_data: dict[str, Any] = {
-        "task_id": "g1_mimic",
-        "scene_id": "g1_flat",
+        "task_id": task_id,
+        "scene_id": scene_id,
         "motion_asset_version_id": "pending",
         "observation": {"history_length": 3, "include_root_velocity": True, "include_projected_gravity": True, "include_reference": True, "clip_value": 100.0},
         "action": {"mode": "joint_position_delta", "scale": robot.actuation.action_scale, "clip": 1.0},
@@ -71,8 +78,8 @@ def build_imitation_config(
         derived={"policy_dt": policy_dt, "episode_horizon": horizon, "observation_dim": observation_dim, "action_dim": robot.dof, "active_reward_terms": ["tracking.joint_pos", "tracking.root_pose", "regularization.action_rate"]},
         defaults=config_data,
         user_overrides=overrides,
+        robot_id=robot.robot_id,
     )
 
 
 __all__ = ["GeneratedImitationConfig", "build_imitation_config"]
-

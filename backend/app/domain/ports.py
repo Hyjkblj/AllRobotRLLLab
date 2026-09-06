@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Protocol
-from pathlib import Path
 
 from .contracts import (
     RetargetMotion,
@@ -16,7 +15,6 @@ from .contracts import (
     ValidationResult,
 )
 from .contracts import (
-    Actor,
     AssetRecord,
     AssetVersion,
     ArtifactRecord,
@@ -26,7 +24,6 @@ from .contracts import (
     P3RunState,
     ProjectMember,
     ProjectRecord,
-    ProjectRole,
     RunEvent,
     RunRecord,
 )
@@ -54,11 +51,21 @@ class RobotAdapter(Protocol):
 
 
 class TrainingBackendAdapter(Protocol):
+    name: str
+
     def validate_config(self, manifest: RunManifest) -> ValidationResult: ...
+
+    def train(self, *, run_id: str, task_id: str, motion_path: Path, config: dict, output_dir: Path | None = None): ...
+
+    def export(self, *, checkpoint_path: Path, task_id: str, output_dir: Path | None = None): ...
 
 
 class Sim2SimAdapter(Protocol):
+    name: str
+
     def validate_bundle(self, manifest: RunManifest) -> ValidationResult: ...
+
+    def evaluate(self, *, seed: int, policy_path: Path | None = None, run_id: str = "run", output_dir: Path | None = None): ...
 
 
 class ProjectRepository(Protocol):

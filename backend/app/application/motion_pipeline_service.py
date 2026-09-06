@@ -1,7 +1,7 @@
 """Executable motion asset pipeline for Local File Mode.
 
 The production GPU processors (GVHMR/GMR) are intentionally not faked here.
-Direct G1 joint trajectories are converted on CPU so the rest of the platform
+Direct joint trajectories are converted on CPU so the rest of the platform
 can be exercised end to end; video/human-pose inputs fail with an explicit
 runtime-unavailable code until those processors are installed on a worker.
 """
@@ -15,7 +15,7 @@ import os
 import tempfile
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ from backend.app.adapters.motion import MotionDetectionError, MotionSourceRegist
 from backend.app.adapters.motion.detector import sha256_file
 from backend.app.application.asset_service import AssetService
 from backend.app.application.motion_editor import MotionEditor
+from backend.app.application.robot_catalog import RobotAdapterRegistry, RobotRegistryError
 from backend.app.application.run_service import RunServiceError, utc_now
 from backend.app.domain.contracts import (
     Actor,
@@ -41,7 +42,6 @@ from backend.app.domain.contracts import (
     MotionQualityReport,
     ProjectRole,
     RetargetMotion,
-    SchemaVersion,
     SourceMotionDescriptor,
     TaskSubmission,
     TrainMotionNPZ,
@@ -51,7 +51,7 @@ from backend.app.domain.contracts import (
 from backend.app.domain.motion import MotionArrays
 from backend.app.infrastructure.local_file import FileLock
 from backend.app.infrastructure.memory import RepositoryConflict
-from backend.app.infrastructure.object_store import LocalObjectStore
+from backend.app.config.settings import settings
 from backend.app.runtime.contracts import RunnerError
 
 
@@ -142,16 +142,19 @@ class MotionPipelineStore:
 class MotionPipelineService:
     stage_names = ("detect", "retarget", "edit", "compile", "publish")
 
-    def __init__(self, *, uow, object_store, robot_adapter, motion_registry: MotionSourceRegistry, motion_editor: MotionEditor, asset_service: AssetService, store: MotionPipelineStore, task_dispatcher=None, kinematics_compiler=None, gvhmr_runner=None, gmr_runner=None) -> None:
+    def __init__(self, *, uow, object_store, robot_adapter, motion_registry: MotionSourceRegistry, motion_editor: MotionEditor, asset_service: AssetService, store: MotionPipelineStore, task_dispatcher=None, kinematics_compiler=None, gvhmr_runner=None, gmr_runner=None, robot_registry: RobotAdapterRegistry | None = None, motion_editors: dict[str, MotionEditor] | None = None, kinematics_compilers: dict[str, object] | None = None) -> None:
         self.uow = uow
         self.object_store = object_store
         self.robot_adapter = robot_adapter
+        self.robot_registry = robot_registry or RobotAdapterRegistry([robot_adapter])
         self.motion_registry = motion_registry
         self.motion_editor = motion_editor
         self.asset_service = asset_service
         self.store = store
         self.task_dispatcher = task_dispatcher
         self.kinematics_compiler = kinematics_compiler
+        self.motion_editors = dict(motion_editors or {robot_adapter.name: motion_editor})
+        self.kinematics_compilers = dict(kinematics_compilers or ({robot_adapter.name: kinematics_compiler} if kinematics_compiler is not None else {}))
         self.gvhmr_runner = gvhmr_runner
         self.gmr_runner = gmr_runner
 
@@ -161,11 +164,17 @@ class MotionPipelineService:
             raise MotionPipelineError("ASSET_KIND_INVALID", "motion processing requires a motion or video asset", status_code=409)
         if version.status != AssetVersionStatus.READY:
             raise MotionPipelineError("ASSET_NOT_READY", f"asset version must be READY before processing, got {version.status}", status_code=409)
-        config = edit_config or MotionEditConfig(source_motion_version_id=asset_version_id, robot_id=self.robot_adapter.name)
+        # Registry selection is the composition-root source of truth. The
+        # compatibility ``robot_adapter`` argument may be a legacy default,
+        # so do not let it override an explicitly configured registry default.
+        default_robot_id = getattr(self.robot_registry, "default_robot_id", None) or self.robot_adapter.name
+        config = edit_config or MotionEditConfig(source_motion_version_id=asset_version_id, robot_id=default_robot_id)
         if config.source_motion_version_id != asset_version_id:
             raise MotionPipelineError("MOTION_SOURCE_MISMATCH", "edit config source_motion_version_id must match the asset version")
-        if config.robot_id != self.robot_adapter.name:
-            raise MotionPipelineError("ROBOT_NOT_FOUND", f"unknown robot adapter: {config.robot_id}", status_code=404)
+        try:
+            self.robot_registry.get(config.robot_id)
+        except RobotRegistryError as exc:
+            raise MotionPipelineError("ROBOT_NOT_FOUND", str(exc), status_code=404) from exc
         existing = next((item for item in self.store.list_for_source(asset_version_id) if item.edit_config and item.edit_config.model_dump(mode="json") == config.model_dump(mode="json") and item.status in {"QUEUED", "RUNNING", "READY"}), None)
         if existing is not None:
             return existing, None
@@ -237,7 +246,7 @@ class MotionPipelineService:
             return self.asset_service.mark_validated(asset_version_id=asset_version_id, valid=True, sha256=digest, size_bytes=int(metadata.get("size_bytes") or path.stat().st_size))
         except MotionDetectionError as exc:
             return self.asset_service.mark_validated(asset_version_id=asset_version_id, valid=False, rejection_code=exc.code)
-        except Exception as exc:
+        except Exception:
             return self.asset_service.mark_validated(asset_version_id=asset_version_id, valid=False, rejection_code="ASSET_OBJECT_UNAVAILABLE")
 
     def process(self, pipeline_id: str) -> MotionPipelineRecord:
@@ -250,14 +259,17 @@ class MotionPipelineService:
         self.store.save(record)
         try:
             version, asset = self._asset_without_actor(record.source_asset_version_id)
+            adapter = self.robot_registry.get(record.edit_config.robot_id if record.edit_config else None)
+            motion_editor = self.motion_editors.get(adapter.name, self.motion_editor)
+            kinematics_compiler = self.kinematics_compilers.get(adapter.name, self.kinematics_compiler)
             if version.status != AssetVersionStatus.READY:
                 raise MotionPipelineError("ASSET_NOT_READY", f"asset version must be READY, got {version.status}", status_code=409)
             path = self._resolve_source(version)
             record = self._stage(record, "detect", "RUNNING")
             generated_retarget = None
             try:
-                descriptor = self.motion_registry.detect(path, asset_version_id=version.asset_version_id, trusted_pickle=False)
-            except MotionDetectionError as exc:
+                descriptor = self.motion_registry.detect(path, asset_version_id=version.asset_version_id, trusted_pickle=False, target_dof=adapter.get_spec().dof, robot_id=adapter.name)
+            except MotionDetectionError:
                 if path.suffix.lower() not in {".mp4", ".mov", ".mkv", ".avi", ".webm"} or self.gvhmr_runner is None or self.gmr_runner is None:
                     raise
                 descriptor = SourceMotionDescriptor(asset_version_id=version.asset_version_id, file_format="pt", detected_type="gvhmr_result", source_skeleton="smpl", coord_frame="world_z_up", quaternion_convention="xyzw", license=LicenseInfo(status="declared", source="user", processing_scope="platform motion processing"), detector_version="gvhmr-gmr-pipeline.v1")
@@ -265,32 +277,32 @@ class MotionPipelineService:
                 record = self._stage(record, "retarget", "RUNNING")
                 try:
                     gvhmr_output, _ = self.gvhmr_runner.run(video_path=path, output_dir=(self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gvhmr")
-                    generated_retarget, _ = self.gmr_runner.run(source_path=gvhmr_output, output_dir=(self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gmr", robot="unitree_g1")
+                    generated_retarget, _ = self.gmr_runner.run(source_path=gvhmr_output, output_dir=(self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gmr", robot=getattr(adapter, "gmr_robot", adapter.name), target_dof=adapter.get_spec().dof)
                 except RunnerError as runner_exc:
                     raise MotionPipelineError(runner_exc.code, str(runner_exc), status_code=503) from runner_exc
                 record = self._stage(record, "retarget", "SUCCEEDED", message="GVHMR/GMR retarget complete")
             record = self._stage(record, "detect", "SUCCEEDED", message=descriptor.detected_type, source_descriptor=descriptor)
             if generated_retarget is None:
                 record = self._stage(record, "retarget", "RUNNING")
-            if descriptor.detected_type not in {"g1_joint_trajectory", "gvhmr_result"}:
+            if descriptor.detected_type not in {"joint_trajectory", "g1_joint_trajectory", "gvhmr_result"}:
                 raise MotionPipelineError("RETARGET_RUNTIME_UNAVAILABLE", "human-pose/GVHMR retargeting requires the Linux GPU processor", status_code=503)
-            expected_names = list(self.robot_adapter.get_spec().joint_names)
+            expected_names = list(adapter.get_spec().joint_names)
             if descriptor.joint_names and descriptor.joint_names not in (expected_names, expected_names + ["root_x", "root_y", "root_z", "root_qx", "root_qy", "root_qz", "root_qw"]):
-                raise MotionPipelineError("MOTION_JOINT_ORDER_MISMATCH", "source joint names do not match the locked G1 adapter order", status_code=422)
-            arrays = self._load_arrays(generated_retarget or path, descriptor)
-            retarget = self._retarget_metadata(arrays, descriptor, version)
-            record = self._stage(record, "retarget", "SUCCEEDED", message="direct G1 trajectory", retarget_motion=retarget)
+                raise MotionPipelineError("MOTION_JOINT_ORDER_MISMATCH", f"source joint names do not match the locked {adapter.name} adapter order", status_code=422)
+            arrays = self._load_arrays(generated_retarget or path, descriptor, adapter=adapter)
+            retarget = self._retarget_metadata(arrays, descriptor, version, adapter=adapter)
+            record = self._stage(record, "retarget", "SUCCEEDED", message=f"direct {adapter.name} trajectory", retarget_motion=retarget)
             record = self._stage(record, "edit", "RUNNING")
-            edit = record.edit_config or MotionEditConfig(source_motion_version_id=version.asset_version_id, robot_id=self.robot_adapter.name)
-            edited = self.motion_editor.apply(arrays, edit)
+            edit = record.edit_config or MotionEditConfig(source_motion_version_id=version.asset_version_id, robot_id=adapter.name)
+            edited = motion_editor.apply(arrays, edit)
             if edited.arrays is None or not edited.validation.valid:
                 raise MotionPipelineError("MOTION_QUALITY_BLOCKED", "motion edit quality gate blocked compilation", status_code=422)
             quality = edited.quality
-            if self.kinematics_compiler is None:
-                quality = edited.quality.model_copy(update={"status": "WARNING", "issues": [*edited.quality.issues, ValidationIssue(code="KINEMATICS_APPROXIMATION", message="body arrays use root pose until the MuJoCo kinematics compiler is installed", severity=ValidationSeverity.WARNING, suggested_action="configure G1_MJCF_PATH and the MuJoCo worker before real-robot deployment")]})
+            if kinematics_compiler is None:
+                quality = edited.quality.model_copy(update={"status": "WARNING", "issues": [*edited.quality.issues, ValidationIssue(code="KINEMATICS_APPROXIMATION", message=f"body arrays use root pose until the {adapter.name} MuJoCo kinematics compiler is installed", severity=ValidationSeverity.WARNING, suggested_action=f"configure the {adapter.name} model path and MuJoCo worker before real-robot deployment")]})
             record = self._stage(record, "edit", "SUCCEEDED", message=quality.status, quality=quality)
             record = self._stage(record, "compile", "RUNNING")
-            train_motion, output_path = self._compile(edited.arrays, version, asset, edited.quality)
+            train_motion, output_path = self._compile(edited.arrays, version, asset, edited.quality, adapter=adapter, kinematics_compiler=kinematics_compiler)
             record = self._stage(record, "compile", "SUCCEEDED", message="TrainMotionNPZ generated", train_motion=train_motion)
             record = self._stage(record, "publish", "RUNNING")
             output_version, output_key = self._publish(output_path, train_motion, asset)
@@ -368,8 +380,11 @@ class MotionPipelineService:
         self.store.save(failed)
         return failed
 
-    def _load_arrays(self, path: Path, descriptor: SourceMotionDescriptor) -> MotionArrays:
+    def _load_arrays(self, path: Path, descriptor: SourceMotionDescriptor, *, adapter=None) -> MotionArrays:
         suffix = path.suffix.lower()
+        target_adapter = adapter or self.robot_adapter
+        target_spec = target_adapter.get_spec()
+        target_dof = int(target_spec.dof)
         values: np.ndarray
         fps = 30.0
         root_pos = None
@@ -393,8 +408,8 @@ class MotionPipelineService:
                 header = next(reader, []) if first and first[0].lstrip().lower().startswith("# joint_names") else first
                 values_start = 2 if header[:2] == ["time_s", "phase"] else 0
                 for row in reader:
-                    values = row[values_start:] if values_start else row[-29:]
-                    rows.append([float(value) for value in values[-29:]])
+                    values = row[values_start:] if values_start else row[-target_dof:]
+                    rows.append([float(value) for value in values[-target_dof:]])
             values = np.asarray(rows, dtype=np.float64)
         elif suffix == ".pt":
             try:
@@ -430,41 +445,51 @@ class MotionPipelineService:
             root_rot = np.asarray(payload.get("root_rot"), dtype=np.float64) if payload.get("root_rot") is not None else None
         else:
             raise MotionPipelineError("UNSUPPORTED_SOURCE_TYPE", f"unsupported motion extension: {suffix}")
-        if values.ndim != 2 or values.shape[0] < 1 or values.shape[1] not in (29, 36):
-            raise MotionPipelineError("SCHEMA_INVALID", "G1 trajectory must have shape [N, 29] or [N, 36]")
-        if values.shape[1] == 36:
-            values = values[:, :29]
-        names = tuple(self.robot_adapter.get_spec().joint_names)
+        if values.ndim != 2 or values.shape[0] < 1 or values.shape[1] not in (target_dof, target_dof + 7):
+            raise MotionPipelineError("SCHEMA_INVALID", f"trajectory must have shape [N, {target_dof}] or [N, {target_dof + 7}]")
+        if values.shape[1] == target_dof + 7:
+            values = values[:, :target_dof]
+        names = tuple(target_spec.joint_names)
         count = len(values)
         if root_pos is None or np.asarray(root_pos).shape != (count, 3):
             root_pos = np.zeros((count, 3), dtype=np.float64)
-            root_pos[:, 2] = 0.75
+            root_pos[:, 2] = float(target_spec.default_root_height)
         if root_rot is None or np.asarray(root_rot).shape != (count, 4):
             root_rot = np.zeros((count, 4), dtype=np.float64)
             root_rot[:, 3] = 1.0
         return MotionArrays(fps=fps, joint_pos=values, root_pos=np.asarray(root_pos, dtype=np.float64), root_rot=np.asarray(root_rot, dtype=np.float64), joint_names=names, quat_convention="xyzw", coord_frame=descriptor.coord_frame or "world_z_up")
 
-    def _retarget_metadata(self, arrays: MotionArrays, descriptor: SourceMotionDescriptor, version: AssetVersion) -> RetargetMotion:
+    def _retarget_metadata(self, arrays: MotionArrays, descriptor: SourceMotionDescriptor, version: AssetVersion, *, adapter=None) -> RetargetMotion:
         root_rot = np.asarray(arrays.root_rot, dtype=np.float64)
         norms = np.linalg.norm(root_rot, axis=1) if len(root_rot) else np.asarray([1.0])
         quality = MotionQuality(nan_count=int(sum(np.count_nonzero(~np.isfinite(np.asarray(item))) for item in (arrays.joint_pos, arrays.root_pos, arrays.root_rot))), quat_norm_max_error=float(np.max(np.abs(norms - 1.0))), joint_limit_violation_ratio=0.0, foot_sliding_ratio=0.0)
-        return RetargetMotion(robot_id=self.robot_adapter.name, fps=arrays.fps, frame_count=len(arrays.joint_pos), arrays={"dof_pos": "retarget/dof_pos.npy", "root_pos": "retarget/root_pos.npy", "root_rot": "retarget/root_rot.npy"}, array_meta={"dof_pos": {"dtype": "float32", "shape": list(arrays.joint_pos.shape)}, "root_pos": {"dtype": "float32", "shape": list(arrays.root_pos.shape)}, "root_rot": {"dtype": "float32", "shape": list(arrays.root_rot.shape), "convention": "xyzw"}}, joint_names=list(arrays.joint_names), coord_frame=arrays.coord_frame, source={"asset_version_id": version.asset_version_id, "sha256": version.sha256 or sha256_file(self._resolve_source(version))}, quality=quality, converter={"name": "g1-direct-trajectory", "version": "g1-direct-trajectory.v1"})
+        target = adapter or self.robot_adapter
+        return RetargetMotion(robot_id=target.name, fps=arrays.fps, frame_count=len(arrays.joint_pos), arrays={"dof_pos": "retarget/dof_pos.npy", "root_pos": "retarget/root_pos.npy", "root_rot": "retarget/root_rot.npy"}, array_meta={"dof_pos": {"dtype": "float32", "shape": list(arrays.joint_pos.shape)}, "root_pos": {"dtype": "float32", "shape": list(arrays.root_pos.shape)}, "root_rot": {"dtype": "float32", "shape": list(arrays.root_rot.shape), "convention": "xyzw"}}, joint_names=list(arrays.joint_names), coord_frame=arrays.coord_frame, source={"asset_version_id": version.asset_version_id, "sha256": version.sha256 or sha256_file(self._resolve_source(version))}, quality=quality, converter={"name": f"{target.name}-direct-trajectory", "version": "direct-trajectory.v1"})
 
-    def _compile(self, arrays: MotionArrays, version: AssetVersion, asset: AssetRecord, quality: MotionQualityReport) -> tuple[TrainMotionNPZ, Path]:
+    def _compile(self, arrays: MotionArrays, version: AssetVersion, asset: AssetRecord, quality: MotionQualityReport, *, adapter=None, kinematics_compiler=None) -> tuple[TrainMotionNPZ, Path]:
         workdir = (self.store.root or Path(tempfile.gettempdir())) / "outputs"
         workdir.mkdir(parents=True, exist_ok=True)
         output_path = workdir / f"{uuid.uuid4()}.npz"
         joint_pos = np.asarray(arrays.joint_pos, dtype=np.float32)
-        body_names = list(self.robot_adapter.get_spec().body_names)
-        if self.kinematics_compiler is not None:
+        target = adapter or self.robot_adapter
+        body_names = list(target.get_spec().body_names)
+        compiler_map = getattr(self, "kinematics_compilers", {})
+        compiler = kinematics_compiler if kinematics_compiler is not None else compiler_map.get(target.name)
+        if settings.is_deployed and compiler is None:
+            raise MotionPipelineError(
+                "KINEMATICS_RUNTIME_UNAVAILABLE",
+                "deployed motion compilation requires a configured model path and MuJoCo kinematics compiler",
+                status_code=503,
+            )
+        if compiler is not None:
             try:
-                compiled = self.kinematics_compiler.compile(joint_pos=joint_pos, root_pos=np.asarray(arrays.root_pos, dtype=np.float64), root_rot=np.asarray(arrays.root_rot, dtype=np.float64), fps=arrays.fps)
+                compiled = compiler.compile(joint_pos=joint_pos, root_pos=np.asarray(arrays.root_pos, dtype=np.float64), root_rot=np.asarray(arrays.root_rot, dtype=np.float64), fps=arrays.fps)
             except RunnerError as exc:
                 raise MotionPipelineError(exc.code, str(exc), status_code=503) from exc
         else:
             root_pos = np.asarray(arrays.root_pos, dtype=np.float32)
             root_vel = np.gradient(root_pos, 1.0 / arrays.fps, axis=0).astype(np.float32) if len(root_pos) > 1 else np.zeros_like(root_pos)
-            compiled = {"joint_pos": np.asarray(joint_pos, dtype=np.float32), "joint_vel": np.gradient(joint_pos, 1.0 / arrays.fps, axis=0).astype(np.float32) if len(joint_pos) > 1 else np.zeros_like(joint_pos), "body_pos_w": np.repeat(root_pos[:, None, :], len(body_names), axis=1), "body_quat_w": np.repeat(np.asarray(arrays.root_rot, dtype=np.float32)[:, None, [3, 0, 1, 2]], len(body_names), axis=1), "body_lin_vel_w": np.repeat(root_vel[:, None, :], len(body_names), axis=1), "body_ang_vel_w": np.zeros((len(root_pos), len(body_names), 3), dtype=np.float32), "compiler_version": "g1-direct-trajectory.v1"}
+            compiled = {"joint_pos": np.asarray(joint_pos, dtype=np.float32), "joint_vel": np.gradient(joint_pos, 1.0 / arrays.fps, axis=0).astype(np.float32) if len(joint_pos) > 1 else np.zeros_like(joint_pos), "body_pos_w": np.repeat(root_pos[:, None, :], len(body_names), axis=1), "body_quat_w": np.repeat(np.asarray(arrays.root_rot, dtype=np.float32)[:, None, [3, 0, 1, 2]], len(body_names), axis=1), "body_lin_vel_w": np.repeat(root_vel[:, None, :], len(body_names), axis=1), "body_ang_vel_w": np.zeros((len(root_pos), len(body_names), 3), dtype=np.float32), "compiler_version": f"{target.name}-direct-trajectory.v1"}
         joint_pos = np.asarray(compiled["joint_pos"], dtype=np.float32)
         joint_vel = np.asarray(compiled["joint_vel"], dtype=np.float32)
         body_pos = np.asarray(compiled["body_pos_w"], dtype=np.float32)
@@ -481,7 +506,7 @@ class MotionPipelineService:
             "body_lin_vel_w": ArrayField(path="body_lin_vel_w", shape=list(body_lin_vel.shape), dtype="float32"),
             "body_ang_vel_w": ArrayField(path="body_ang_vel_w", shape=list(body_ang_vel.shape), dtype="float32"),
         }
-        train = TrainMotionNPZ(robot_id=self.robot_adapter.name, fps=arrays.fps, frame_count=len(joint_pos), joint_names=list(arrays.joint_names), body_names=body_names, arrays=arrays_meta, coord_frame=arrays.coord_frame, quat_convention="wxyz", source_motion_hash=source_hash, compiler_version=str(compiled.get("compiler_version", "g1-direct-trajectory.v1")))
+        train = TrainMotionNPZ(robot_id=target.name, fps=arrays.fps, frame_count=len(joint_pos), joint_names=list(arrays.joint_names), body_names=body_names, arrays=arrays_meta, coord_frame=arrays.coord_frame, quat_convention="wxyz", source_motion_hash=source_hash, compiler_version=str(compiled.get("compiler_version", f"{target.name}-direct-trajectory.v1")))
         return train, output_path
 
     def _publish(self, output_path: Path, train_motion: TrainMotionNPZ, source_asset: AssetRecord) -> tuple[AssetVersion, str]:

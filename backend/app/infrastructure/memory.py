@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import threading
 from collections import defaultdict
-from datetime import datetime, timezone
 
 from backend.app.domain.contracts import (
     AttemptRecord,

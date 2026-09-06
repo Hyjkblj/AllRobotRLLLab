@@ -1,4 +1,6 @@
-from scripts.collect_runtime_manifest import _asset_identity
+from pathlib import Path
+
+from scripts.collect_runtime_manifest import _asset_identity, collect
 
 
 def test_runtime_manifest_records_isaac_training_urdf(monkeypatch, tmp_path) -> None:
@@ -21,3 +23,10 @@ def test_runtime_manifest_keeps_usd_optional_for_urdf_tasks(monkeypatch, tmp_pat
 
     assert identity["isaac_urdf"] == {"path": None, "status": "not_configured"}
     assert identity["isaac_usd"] == {"path": None, "status": "not_configured"}
+
+
+def test_collect_runtime_manifest_includes_enabled_robot_assets(monkeypatch) -> None:
+    monkeypatch.setenv("ROBOT_ADAPTER_MODULES", "adapters.unitree_h1_19dof")
+    manifest = collect(Path(__file__).resolve().parents[3], profile="api")
+    assert "unitree_h1_19dof" in manifest["robot_assets"]
+    assert manifest["robot_assets"]["unitree_h1_19dof"]["mujoco_xml_uri"]["exists"] is True

@@ -139,7 +139,8 @@ npm run dev -- --host 127.0.0.1
 
 ## 数据约定
 
-- 服务模型固定优先使用 `third_party/GMR-master/assets/unitree_g1/g1_mocap_29dof.xml`。
+- 服务模型默认使用 G1，但可通过 `MOTIONLAB_ROBOT_SPEC`、`MOTIONLAB_MODEL_PATH`
+  和 `MOTIONLAB_URDF_PATH` 切换到已登记的其他机器人。
 - URDF 元数据来自同目录的 `g1_custom_collision_29dof.urdf`。
 - `UnitreeG1Dance` 下包含 `qpos` 序列的 `.npz/.csv` 可直接逐帧播放和编辑。
 - 现有 `.pt` 文件主要是 TorchScript policy 或训练 checkpoint，不是动作帧；工作台会识别并展示它们。若 `.pt` 内含形如 `[T, 36]`、`[T, 29]` 的 qpos/action tensor，在环境中安装 Torch 后即可被服务解码。

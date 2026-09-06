@@ -24,10 +24,22 @@ def test_motion_edit_create_and_compile_api() -> None:
 
 def test_reward_config_version_api() -> None:
     client = TestClient(app)
-    created = client.post("/api/v1/reward-configs", json=default_reward_config().model_dump(mode="json"))
+    created = client.post("/api/v1/reward-configs", params={"robot_id": "unitree_g1_29dof", "task_id": "g1_mimic"}, json=default_reward_config(robot_id="unitree_g1_29dof", task_id="g1_mimic").model_dump(mode="json"))
     assert created.status_code == 200
     version_id = created.json()["item"]["version_id"]
     fetched = client.get(f"/api/v1/reward-configs/{version_id}")
     assert fetched.status_code == 200
     assert fetched.json()["item"]["config"]["base_template"] == "g1_mimic_v1"
 
+
+def test_motion_edit_source_asset_is_project_scoped() -> None:
+    client = TestClient(app, headers={"X-User-Id": "motion-owner"})
+    project = client.post("/api/v1/projects", json={"name": "motion-auth"}).json()["item"]["project_id"]
+    asset = client.post(f"/api/v1/projects/{project}/assets", json={"kind": "motion", "display_name": "walk", "original_filename": "walk.npz", "license": {"status": "declared"}}).json()
+    source_id = asset["version"]["asset_version_id"]
+    created = client.post("/api/v1/motion-edits", json={"source_motion_version_id": source_id, "robot_id": "unitree_g1_29dof", "global_transform": {"translation": [0, 0, 0], "yaw_offset": 0, "time_scale": 1}, "joint_offsets": [], "ik_targets": [], "keyframes": [], "filters": {"smooth": True, "max_velocity_check": True}})
+    assert created.status_code == 200
+    version_id = created.json()["item"]["version_id"]
+    outsider = TestClient(app, headers={"X-User-Id": "outsider"})
+    response = outsider.get(f"/api/v1/motion-edits/{version_id}")
+    assert response.status_code == 403

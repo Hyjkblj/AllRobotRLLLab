@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 import shutil
-import os
 from pathlib import Path
 from typing import Any
 
@@ -23,14 +22,23 @@ class IsaacLabRunner:
         self.workspace = Path(workspace).resolve()
         self.timeout_seconds = timeout_seconds
 
+    def _runtime_checks(self):
+        """Resolve the three runtimes used by Unitree's Isaac entry points."""
+
+        isaac_lab = self.registry.require("isaac_lab")
+        isaac_sim = self.registry.require("isaac_sim")
+        unitree_rl_lab = self.registry.require("unitree_rl_lab")
+        return isaac_lab, isaac_sim, unitree_rl_lab
+
     def train(self, *, run_id: str, task_id: str, motion_path: Path, config: dict[str, Any], output_dir: Path | None = None) -> TrainingExecution:
-        check = self.registry.require("isaac_lab")
+        isaac_lab, isaac_sim, unitree_rl_lab = self._runtime_checks()
         target = Path(output_dir or self.workspace / run_id / "train").resolve()
         target.mkdir(parents=True, exist_ok=True)
         config_path = target / "training_config.json"
         config_path.write_text(json.dumps({"run_id": run_id, "task_id": task_id, "motion_path": str(Path(motion_path).resolve()), "config": config}, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
-        rl_path = Path(os.getenv("UNITREE_RL_LAB_PATH", "")).expanduser() if os.getenv("UNITREE_RL_LAB_PATH", "").strip() else Path(check.path or ".")
-        default = [check.python or "python", str(rl_path / "scripts" / "rsl_rl" / "train.py"), "--headless", "--task", task_id]
+        rl_path = Path(unitree_rl_lab.path or ".")
+        python = unitree_rl_lab.python or isaac_lab.python or isaac_sim.python or "python"
+        default = [python, str(rl_path / "scripts" / "rsl_rl" / "train.py"), "--headless", "--task", task_id]
         command = command_from_env("ISAAC_TRAIN_COMMAND", default=default)
         command = tuple(item.format(run_id=run_id, task=task_id, motion=str(motion_path), output=str(target), config=str(config_path)) for item in (command or default))
         result = run_external(stage="isaac_train", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_RUN_ID": run_id, "ALLROBOTRL_MOTION": str(motion_path), "ALLROBOTRL_OUTPUT": str(target), "ALLROBOTRL_CONFIG": str(config_path)})
@@ -38,17 +46,18 @@ class IsaacLabRunner:
         if checkpoint is None:
             raise RunnerError("ISAAC_CHECKPOINT_MISSING", "Isaac Lab completed without a checkpoint", details={"workspace": str(target)})
         metrics = self._read_metrics(target)
-        manifest = write_output_manifest(target, stage="isaac_train", outputs=[checkpoint, *self._metric_files(target)], metadata={"runtime": check.as_dict(), "adapter_version": self.version, "task_id": task_id})
+        manifest = write_output_manifest(target, stage="isaac_train", outputs=[checkpoint, *self._metric_files(target)], metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict(), unitree_rl_lab.as_dict()], "adapter_version": self.version, "task_id": task_id})
         result = ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {"checkpoint": checkpoint}, manifest)
         iteration = int(metrics[-1].get("iteration", config.get("ppo", {}).get("max_iterations", 0))) if metrics else int(config.get("ppo", {}).get("max_iterations", 0))
         return TrainingExecution(checkpoint_path=checkpoint, iteration=iteration, metrics=metrics, result=result)
 
     def export(self, *, checkpoint_path: Path, task_id: str, output_dir: Path | None = None) -> ExternalRunResult:
-        check = self.registry.require("isaac_lab")
+        isaac_lab, isaac_sim, unitree_rl_lab = self._runtime_checks()
         target = Path(output_dir or checkpoint_path.parent / "export").resolve()
         target.mkdir(parents=True, exist_ok=True)
-        rl_path = Path(os.getenv("UNITREE_RL_LAB_PATH", "")).expanduser() if os.getenv("UNITREE_RL_LAB_PATH", "").strip() else Path(check.path or ".")
-        default = [check.python or "python", str(rl_path / "scripts" / "rsl_rl" / "play.py"), "--task", task_id, "--checkpoint", str(checkpoint_path)]
+        rl_path = Path(unitree_rl_lab.path or ".")
+        python = unitree_rl_lab.python or isaac_lab.python or isaac_sim.python or "python"
+        default = [python, str(rl_path / "scripts" / "rsl_rl" / "play.py"), "--task", task_id, "--checkpoint", str(checkpoint_path)]
         command = command_from_env("ISAAC_EXPORT_COMMAND", default=default)
         command = tuple(item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target)) for item in (command or default))
         result = run_external(stage="isaac_export", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_CHECKPOINT": str(checkpoint_path), "ALLROBOTRL_OUTPUT": str(target)})
@@ -66,8 +75,23 @@ class IsaacLabRunner:
                 outputs = [path for path in target.iterdir() if path.is_file()]
         if not outputs:
             raise RunnerError("ISAAC_EXPORT_OUTPUT_MISSING", "Isaac Lab export produced no files")
-        write_output_manifest(target, stage="isaac_export", outputs=outputs, metadata={"runtime": check.as_dict(), "adapter_version": self.version})
-        return ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {path.name: path for path in outputs})
+        manifest = write_output_manifest(target, stage="isaac_export", outputs=outputs, metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict(), unitree_rl_lab.as_dict()], "adapter_version": self.version})
+        return ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {path.name: path for path in outputs}, manifest)
+
+    def play(self, *, checkpoint_path: Path, task_id: str, output_dir: Path | None = None) -> ExternalRunResult:
+        """Run headless policy playback without changing the Run state."""
+        isaac_lab, isaac_sim, unitree_rl_lab = self._runtime_checks()
+        target = Path(output_dir or checkpoint_path.parent / "play").resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        rl_path = Path(unitree_rl_lab.path or ".")
+        python = unitree_rl_lab.python or isaac_lab.python or isaac_sim.python or "python"
+        default = [python, str(rl_path / "scripts" / "rsl_rl" / "play.py"), "--headless", "--task", task_id, "--checkpoint", str(checkpoint_path)]
+        command = command_from_env("ISAAC_PLAY_COMMAND", default=default)
+        command = tuple(item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target)) for item in (command or default))
+        result = run_external(stage="isaac_play", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_CHECKPOINT": str(checkpoint_path), "ALLROBOTRL_OUTPUT": str(target)})
+        outputs = [path for path in target.rglob("*") if path.is_file() and "manifest" not in path.parts]
+        manifest = write_output_manifest(target, stage="isaac_play", outputs=outputs or [target / "logs" / "isaac_play.json"], metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict(), unitree_rl_lab.as_dict()], "adapter_version": self.version, "task_id": task_id})
+        return ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {path.name: path for path in outputs}, manifest)
 
     @staticmethod
     def _find_checkpoint(root: Path) -> Path | None:

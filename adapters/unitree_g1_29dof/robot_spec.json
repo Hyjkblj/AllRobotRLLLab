@@ -51,6 +51,7 @@
   ],
   "body_names": ["pelvis", "torso_link", "left_rubber_hand", "right_rubber_hand", "left_ankle_roll_link", "right_ankle_roll_link"],
   "dof": 29,
+  "default_root_height": 0.75,
   "actuation": {
     "mode": "position_pd",
     "control_dt": 0.02,
@@ -61,8 +62,11 @@
     "torque_limits": [88, 139, 88, 139, 50, 50, 88, 139, 88, 139, 50, 50, 88, 50, 50, 25, 25, 25, 25, 25, 5, 5, 25, 25, 25, 25, 25, 5, 5]
   },
   "capabilities": ["mimic"],
+  "action_modes": ["joint_position_delta"],
   "gmr_mapping_version": "gmr_g1.v1",
   "isaac_task_ids": ["g1_mimic"],
+  "default_scene_id": "g1_flat",
+  "training_provider": "unitree_rl_lab",
   "sim2sim_adapter": "unitree_g1_mujoco",
   "license": {"status": "research_only", "source": "Unitree/GMR assets"}
 }

@@ -61,10 +61,16 @@ export const platformApi = {
   listProjectRuns: (projectId) => request(`/projects/${encodeURIComponent(projectId)}/runs`),
   createProject: (name) => request("/projects", { method: "POST", body: JSON.stringify({ name }) }),
   listRobots: () => request("/robots"),
+  listTasks: (robotId) => request(`/tasks${robotId ? `?robot_id=${encodeURIComponent(robotId)}` : ""}`),
   robotSelfCheck: (robotId) => request(`/robots/${encodeURIComponent(robotId)}/self-check`),
-  rewardTemplates: () => request("/reward-templates"),
+  rewardTemplates: (robotId, taskId) => {
+    const query = new URLSearchParams();
+    if (robotId) query.set("robot_id", robotId);
+    if (taskId) query.set("task_id", taskId);
+    return request(`/reward-templates${query.toString() ? `?${query.toString()}` : ""}`);
+  },
   trainingSchema: () => request("/training-config/schema"),
-  validateTraining: (config) => request("/training-config/validate", { method: "POST", body: JSON.stringify(config) }),
+  validateTraining: (config, robotId) => request(`/training-config/validate${robotId ? `?robot_id=${encodeURIComponent(robotId)}` : ""}`, { method: "POST", body: JSON.stringify(config) }),
   createAsset: ({ projectId, kind, displayName, originalFilename, contentType, license }) => request(`/projects/${encodeURIComponent(projectId)}/assets`, {
     method: "POST",
     body: JSON.stringify({ kind, display_name: displayName, original_filename: originalFilename, content_type: contentType || null, license })
@@ -86,14 +92,25 @@ export const platformApi = {
     return { ...created, completed, sha256: digest };
   },
   listAssetVersions: (assetId) => request(`/assets/${encodeURIComponent(assetId)}/versions`),
-  detectMotion: ({ path, assetVersionId }) => request("/motions/detect", { method: "POST", body: JSON.stringify({ path: path || null, asset_version_id: assetVersionId || null }) }),
+  detectMotion: ({ path, assetVersionId, robotId }) => request("/motions/detect", { method: "POST", body: JSON.stringify({ path: path || null, asset_version_id: assetVersionId || null, robot_id: robotId || null }) }),
   processMotion: (assetVersionId, editConfig = null, executionMode = "async") => request(`/motions/${encodeURIComponent(assetVersionId)}/process`, { method: "POST", headers: { "X-Execution-Mode": executionMode }, body: JSON.stringify({ edit_config: editConfig }) }),
   getMotionPipeline: (assetVersionId) => request(`/motions/${encodeURIComponent(assetVersionId)}/pipeline`),
   getMotionPipelineById: (pipelineId) => request(`/motion-pipelines/${encodeURIComponent(pipelineId)}`),
   validateMotionEdit: (config) => request("/motion-edits", { method: "POST", body: JSON.stringify(config) }),
   compileMotionEdit: (versionId, arrays) => request(`/motion-edits/${encodeURIComponent(versionId)}/compile`, { method: "POST", body: JSON.stringify(arrays) }),
-  validateReward: (config) => request("/reward-configs/validate", { method: "POST", body: JSON.stringify(config) }),
-  createReward: (config, parentVersionId) => request(`/reward-configs${parentVersionId ? `?parent_version_id=${encodeURIComponent(parentVersionId)}` : ""}`, { method: "POST", body: JSON.stringify(config) }),
+  validateReward: (config, robotId, taskId) => {
+    const query = new URLSearchParams();
+    if (robotId) query.set("robot_id", robotId);
+    if (taskId) query.set("task_id", taskId);
+    return request(`/reward-configs/validate${query.toString() ? `?${query.toString()}` : ""}`, { method: "POST", body: JSON.stringify(config) });
+  },
+  createReward: (config, parentVersionId, robotId, taskId) => {
+    const query = new URLSearchParams();
+    if (parentVersionId) query.set("parent_version_id", parentVersionId);
+    if (robotId) query.set("robot_id", robotId);
+    if (taskId) query.set("task_id", taskId);
+    return request(`/reward-configs${query.toString() ? `?${query.toString()}` : ""}`, { method: "POST", body: JSON.stringify(config) });
+  },
   createRun: (payload, idempotencyKey) => request("/runs", { method: "POST", headers: { "Idempotency-Key": idempotencyKey || crypto.randomUUID() }, body: JSON.stringify(payload) }),
   getRun: (runId) => request(`/runs/${encodeURIComponent(runId)}`),
   submitTraining: (runId, config) => request(`/runs/${encodeURIComponent(runId)}/train`, { method: "POST", headers: { "X-Execution-Mode": "async" }, body: JSON.stringify(config) }),
@@ -107,29 +124,47 @@ export const platformApi = {
   subscribeRun: (runId, { afterSeq = 0, onEvent, onError, signal } = {}) => {
     const controller = new AbortController();
     signal?.addEventListener("abort", () => controller.abort(), { once: true });
-    const url = `${PLATFORM_API}/runs/${encodeURIComponent(runId)}/events?after_seq=${afterSeq}`;
-    fetch(url, { headers: { Accept: "text/event-stream", "X-User-Id": "local-user" }, signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw normalizeError(await response.json().catch(() => ({})), response.status);
-        if (!response.body) return;
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (!controller.signal.aborted) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const chunks = buffer.split("\n\n");
-          buffer = chunks.pop() || "";
-          chunks.forEach((chunk) => {
-            const data = chunk.split("\n").find((line) => line.startsWith("data:"));
-            if (data) {
-              try { onEvent?.(JSON.parse(data.slice(5).trim())); } catch { /* ignore malformed keep-alive */ }
-            }
-          });
+    let cursor = afterSeq;
+    let retryDelay = 500;
+    const consume = async () => {
+      while (!controller.signal.aborted) {
+        const url = `${PLATFORM_API}/runs/${encodeURIComponent(runId)}/events?after_seq=${cursor}&follow=true`;
+        try {
+          const response = await fetch(url, { headers: { Accept: "text/event-stream", "X-User-Id": "local-user" }, signal: controller.signal });
+          if (!response.ok) throw normalizeError(await response.json().catch(() => ({})), response.status);
+          if (!response.body) return;
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (!controller.signal.aborted) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const chunks = buffer.split("\n\n");
+            buffer = chunks.pop() || "";
+            chunks.forEach((chunk) => {
+              const data = chunk.split("\n").find((line) => line.startsWith("data:"));
+              if (data) {
+                try {
+                  const event = JSON.parse(data.slice(5).trim());
+                  if (Number.isFinite(event.seq)) cursor = Math.max(cursor, event.seq);
+                  onEvent?.(event);
+                } catch { /* ignore malformed keep-alive */ }
+              }
+            });
+          }
+          retryDelay = 500;
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          onError?.(error);
         }
-      })
-      .catch((error) => { if (!controller.signal.aborted) onError?.(error); });
+        if (!controller.signal.aborted) {
+          await new Promise((resolve) => window.setTimeout(resolve, retryDelay));
+          retryDelay = Math.min(retryDelay * 2, 5000);
+        }
+      }
+    };
+    consume();
     return () => controller.abort();
   }
 };

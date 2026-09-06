@@ -83,7 +83,13 @@ docker compose -f infra/compose/docker-compose.staging.yml --env-file .env.stagi
 python scripts/collect_runtime_manifest.py --strict --output .runtime/runtime-manifest.json
 ```
 
-`worker-cpu` 只消费 `cpu` 队列，训练和 sim2sim 的 `isaac-gpu`/`sim2sim-gpu` 队列由带 `gpus: all` 的 `worker-gpu` 消费。没有 NVIDIA Container Toolkit 或外部运行时目录时，GPU profile 应保持停止，不能把 CPU smoke 结果当作真实验收。
+`worker-cpu` 只消费 `cpu,asset-io,motion-cpu` 队列，并对所有通过
+`ROBOT_ADAPTER_MODULES` 启用的机器人只读挂载模型；训练、视频动作处理和
+sim2sim 的 `isaac-gpu`/`motion-gpu`/`sim2sim-gpu` 队列由带 `gpus: all` 的
+`worker-gpu` 消费。没有 NVIDIA Container Toolkit 或外部运行时目录时，GPU
+profile 应保持停止，不能把 CPU smoke 结果当作真实验收。
+
+Compose 中 API、CPU worker 和 GPU worker 分别使用 `api`、`motion-cpu`、`gpu` runtime profile。运行时检查脚本和 CLI doctor 支持同名 `--profile` 参数；不要使用未声明的 profile 绕过必需依赖检查。
 
 `migrate` 一次性服务会在 API/worker 前取得 PostgreSQL advisory lock，按文件名顺序执行未记录的迁移并写入 `schema_migrations`。这使已有数据库卷也能安全接收后续迁移；不要删除持久化卷来“解决”迁移问题。`004_p3_run_state.sql` 持久化训练配置、checkpoint、导出元数据、策略包和 sim2sim 报告。API 与 worker 共享 `staging-runtime` 卷，最终产物仍必须写入 MinIO。
 
@@ -127,6 +133,20 @@ python scripts/probe_isaacsim.py --frames 5 --output .runtime/isaacsim-probe.jso
 `G1_ISAAC_URDF_PATH` 指向 Unitree ROS 的 URDF，并由 Isaac Lab 在运行时转换
 为 USD；因此该任务不需要本地 `G1_USD_PATH`。只有使用
 `UnitreeUsdFileCfg` 的任务才需要配置本地或可访问的 USD 资产。
+
+多机器人 staging 示例：
+
+```bash
+export ROBOT_ADAPTER_MODULES=adapters.unitree_g1_29dof,adapters.unitree_h1_19dof
+export G1_MJCF_PATH=/opt/GMR/assets/unitree_g1/g1_mocap_29dof.xml
+export H1_MJCF_PATH=/opt/assets/unitree_h1/h1.xml
+export H1_SIM2SIM_COMMAND='python /opt/h1_sim/evaluate.py --seed {seed} --policy {policy} --output {output}'
+```
+
+G1 的 `unitree_rl_lab` provider 仅接受 `unitree_g1_29dof/g1_mimic`；H1 的
+`unitree_h1_19dof/h1_mimic` 应配置 `P3_BACKEND=isaac_lab` 与
+`NATIVE_ISAAC_TRAIN_COMMAND`、`NATIVE_ISAAC_EXPORT_COMMAND`。provider 和
+sim2sim adapter 均按 Run Manifest 选择，不要为 H1 复用 G1 的命令或模型。
 
 ## 6. 发布和回滚
 

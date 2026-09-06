@@ -55,30 +55,20 @@ except ImportError:  # pragma: no cover - depends on the selected conda env
 
 ROOT = Path(__file__).resolve().parents[1]
 THIRD_PARTY = ROOT / "third_party"
-ACTION_ROOT = Path(
-    os.environ.get("MOTIONLAB_ACTION_ROOT", r"D:\Develop\Project\UnitreeG1Dance")
-).expanduser()
-MODEL_OVERRIDE = os.environ.get("MOTIONLAB_MODEL_PATH")
-URDF_OVERRIDE = os.environ.get("MOTIONLAB_URDF_PATH")
-MODEL_CANDIDATES = [
-    Path(MODEL_OVERRIDE) if MODEL_OVERRIDE else None,
-    THIRD_PARTY / "GMR-master" / "assets" / "unitree_g1" / "g1_mocap_29dof.xml",
-    ACTION_ROOT / "GMR" / "assets" / "unitree_g1" / "g1_mocap_29dof.xml",
-]
-URDF_CANDIDATES = [
-    Path(URDF_OVERRIDE) if URDF_OVERRIDE else None,
-    THIRD_PARTY / "GMR-master" / "assets" / "unitree_g1" / "g1_custom_collision_29dof.urdf",
-    ACTION_ROOT / "GMR" / "assets" / "unitree_g1" / "g1_custom_collision_29dof.urdf",
-]
-SOURCE_MODEL_PATH = next((p for p in MODEL_CANDIDATES if p and p.exists()), None)
-URDF_PATH = next((p for p in URDF_CANDIDATES if p and p.exists()), None)
-if SOURCE_MODEL_PATH is None:
-    raise FileNotFoundError(
-        "G1 MuJoCo model was not found in third_party/GMR-master/assets/unitree_g1"
-    )
-
-
-RUNTIME_MODEL_ROOT = ROOT / "frontend-prototype" / ".runtime" / "g1_mocap_29dof"
+try:
+    from backend.app.runtime.mujoco_config import resolve_mujoco_model_config
+except ModuleNotFoundError:  # direct script execution from the frontend folder
+    sys.path.insert(0, str(ROOT))
+    from backend.app.runtime.mujoco_config import resolve_mujoco_model_config
+MODEL_CONFIG = resolve_mujoco_model_config(repository_root=ROOT)
+ACTION_ROOT = Path(os.environ.get("MOTIONLAB_ACTION_ROOT", r"D:\Develop\Project\UnitreeG1Dance")).expanduser()
+SOURCE_MODEL_PATH = MODEL_CONFIG.model_path
+URDF_PATH = MODEL_CONFIG.urdf_path
+MODEL_NAME = MODEL_CONFIG.model_name
+ROOT_BODY = MODEL_CONFIG.root_body
+ROOT_HEIGHT = MODEL_CONFIG.root_height
+RUNTIME_MODEL_ROOT = ROOT / "frontend-prototype" / ".runtime" / MODEL_CONFIG.robot_id / MODEL_NAME
+ROBOT_ID = MODEL_CONFIG.robot_id
 
 
 def _prepare_runtime_model(source: Path) -> Path:
@@ -91,7 +81,7 @@ def _prepare_runtime_model(source: Path) -> Path:
     """
     target = RUNTIME_MODEL_ROOT / source.name
     stamp = RUNTIME_MODEL_ROOT / ".source-stamp"
-    source_stamp = str(source.stat().st_mtime_ns)
+    source_stamp = f"{source.resolve()}::{source.stat().st_mtime_ns}"
     if target.exists() and stamp.exists() and stamp.read_text(encoding="ascii") == source_stamp:
         return target
     if RUNTIME_MODEL_ROOT.exists():
@@ -99,11 +89,17 @@ def _prepare_runtime_model(source: Path) -> Path:
     (RUNTIME_MODEL_ROOT / "meshes").mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
     xml_text = source.read_text(encoding="utf-8")
+    try:
+        compiler = ET.fromstring(xml_text).find("compiler")
+        mesh_root = str(compiler.attrib.get("meshdir", "")) if compiler is not None else ""
+    except ET.ParseError:
+        mesh_root = ""
     for mesh_name in re.findall(r'file="([^"]+)"', xml_text):
-        source_mesh = source.parent / "meshes" / mesh_name
-        target_mesh = RUNTIME_MODEL_ROOT / "meshes" / mesh_name
+        source_mesh = source.parent / mesh_root / mesh_name
+        target_mesh = RUNTIME_MODEL_ROOT / mesh_root / mesh_name
         if not source_mesh.exists():
             continue
+        target_mesh.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_mesh, target_mesh)
         raw = bytearray(target_mesh.read_bytes())
         if len(raw) >= 84 and raw[:5].lower() == b"solid":
@@ -117,8 +113,8 @@ def _prepare_runtime_model(source: Path) -> Path:
 
 MODEL_PATH = _prepare_runtime_model(SOURCE_MODEL_PATH)
 
-FPS = 30
-FRAME_COUNT = 121
+FPS = int(os.environ.get("MOTIONLAB_FPS", "30"))
+FRAME_COUNT = int(os.environ.get("MOTIONLAB_FRAME_COUNT", "121"))
 RUNTIME_VERSION = str(getattr(mujoco, "__version__", "unknown"))
 MUJOCO_SOURCE_VERSION = "3.12.1"  # third_party/mujoco-main/CMakeLists.txt
 
@@ -174,7 +170,7 @@ class ActionAsset:
             "nq": self.nq,
             "jointNames": self.joint_names,
             "loadError": self.load_error,
-            "source": "UnitreeG1Dance",
+            "source": self.root.name,
         }
 
 
@@ -443,7 +439,7 @@ class MuJoCoSession:
     def _base_pose(self) -> list[float]:
         pose = [float(value) for value in self.model.qpos0]
         if len(pose) >= 7:
-            pose[0:7] = [0.0, 0.0, 0.79, 1.0, 0.0, 0.0, 0.0]
+            pose[0:7] = [0.0, 0.0, ROOT_HEIGHT, 1.0, 0.0, 0.0, 0.0]
         return pose
 
     def _demo_pose(self, frame: int) -> list[float]:
@@ -496,9 +492,9 @@ class MuJoCoSession:
             for joint in self.joints:
                 value = float(self.data.qpos[joint["qposAdr"]])
                 joints.append({"name": joint["name"], "angleRad": value, "angleDeg": math.degrees(value), "lowerDeg": joint["lowerDeg"], "upperDeg": joint["upperDeg"], "limited": joint["limited"]})
-            pelvis = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+            pelvis = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, ROOT_BODY)
             if pelvis < 0:
-                pelvis = 1
+                pelvis = 1 if self.model.nbody > 1 else 0
             return {"frame": actual_frame, "timeSec": actual_frame / FPS, "fps": FPS, "qpos": [float(value) for value in self.data.qpos], "joints": joints, "root": {"x": float(self.data.xpos[pelvis][0]), "y": float(self.data.xpos[pelvis][1]), "z": float(self.data.xpos[pelvis][2])}, "overrideCount": len(self.overrides.get((asset_id or "demo", actual_frame), {})), "engine": "MuJoCo", "assetId": asset_id, "modelPath": str(self.model_path)}
 
     def apply_joint(self, frame: int, name: str, angle_deg: float, asset_id: str | None = None) -> dict:
@@ -531,7 +527,7 @@ class MuJoCoSession:
         frames = [int(frame) for frame in body.get("frames", sorted({k["frame"] for k in self.keyframes.values()}))]
         if not frames:
             frames = [int(body.get("frame", 0))]
-        return {"format": "mujoco.pose.v1", "engine": f"MuJoCo {RUNTIME_VERSION}", "model": {"name": "g1_mocap_29dof", "path": str(self.model_path), "urdfPath": str(URDF_PATH) if URDF_PATH else None, "nq": self.model.nq, "nv": self.model.nv, "jointCount": len(self.joints)}, "asset": self.actions.get(asset_id).public() if asset_id else None, "fps": FPS, "frames": [self.frame_payload(frame, asset_id) for frame in frames], "keyframes": [value for value in self.keyframes.values() if value.get("assetId") == asset_id], "metadata": body.get("metadata", {}), "exportedAt": iso_now()}
+        return {"format": "mujoco.pose.v1", "engine": f"MuJoCo {RUNTIME_VERSION}", "model": {"name": MODEL_NAME, "robotId": ROBOT_ID, "path": str(self.model_path), "urdfPath": str(URDF_PATH) if URDF_PATH else None, "nq": self.model.nq, "nv": self.model.nv, "jointCount": len(self.joints)}, "asset": self.actions.get(asset_id).public() if asset_id else None, "fps": FPS, "frames": [self.frame_payload(frame, asset_id) for frame in frames], "keyframes": [value for value in self.keyframes.values() if value.get("assetId") == asset_id], "metadata": body.get("metadata", {}), "exportedAt": iso_now()}
 
 
 def encode_png(rgb: Any) -> bytes:
@@ -579,10 +575,23 @@ class MuJoCoRenderer:
                     "size": None,
                 }
                 state["camera"].type = mujoco.mjtCamera.mjCAMERA_FREE
-                # Construct a small framebuffer now so startup validates the
-                # selected backend. It is resized lazily for actual requests.
-                state["renderer"] = mujoco.Renderer(self.model, height=640, width=640)
-                state["size"] = (640, 640)
+                # Construct a framebuffer now so startup validates the
+                # selected backend. Models such as Unitree H1 ship with a
+                # smaller offscreen buffer than G1, so respect the model's
+                # declared limits rather than assuming 640x640.
+                max_width = int(getattr(self.model.vis.global_, "offwidth", 640)) or 640
+                max_height = int(getattr(self.model.vis.global_, "offheight", 640)) or 640
+                initial_size = (min(640, max_width), min(640, max_height))
+                try:
+                    state["renderer"] = mujoco.Renderer(self.model, height=initial_size[1], width=initial_size[0])
+                    state["size"] = initial_size
+                except Exception:
+                    # Some headless drivers expose a smaller framebuffer than
+                    # the model declaration. Retry once with a conservative
+                    # size so the service remains usable for inspection.
+                    fallback = (min(initial_size[0], 480), min(initial_size[1], 360))
+                    state["renderer"] = mujoco.Renderer(self.model, height=fallback[1], width=fallback[0])
+                    state["size"] = fallback
                 self.states[thread_id] = state
             return state
 
@@ -590,13 +599,22 @@ class MuJoCoRenderer:
         if state["renderer"] is None or state["size"] != (width, height):
             if state["renderer"] is not None:
                 state["renderer"].close()
-            state["renderer"] = mujoco.Renderer(self.model, height=height, width=width)
-            state["size"] = (width, height)
+            try:
+                state["renderer"] = mujoco.Renderer(self.model, height=height, width=width)
+                state["size"] = (width, height)
+            except Exception:
+                fallback = (min(width, 480), min(height, 360))
+                state["renderer"] = mujoco.Renderer(self.model, height=fallback[1], width=fallback[0])
+                state["size"] = fallback
         return state["renderer"]
 
     def render(self, pose: list[float], width: int = 640, height: int = 640, azimuth: float = 135.0, elevation: float = -25.0, distance: float = 2.35) -> bytes:
         width = max(240, min(1400, int(width)))
         height = max(240, min(1000, int(height)))
+        max_width = int(getattr(self.model.vis.global_, "offwidth", width)) or width
+        max_height = int(getattr(self.model.vis.global_, "offheight", height)) or height
+        width = min(width, max_width)
+        height = min(height, max_height)
         if self.closed:
             raise RuntimeError("MuJoCo renderer is closed")
         state = self._state()
@@ -605,7 +623,7 @@ class MuJoCoRenderer:
         data.qpos[:] = pose
         mujoco.mj_forward(self.model, data)
         renderer = self._ensure_renderer(state, width, height)
-        camera.lookat[:] = [0.0, 0.0, 0.82]
+        camera.lookat[:] = [0.0, 0.0, ROOT_HEIGHT]
         camera.distance = max(1.5, min(8.0, float(distance)))
         camera.azimuth = float(azimuth)
         camera.elevation = max(-89.0, min(89.0, float(elevation)))
@@ -722,7 +740,7 @@ class Handler(BaseHTTPRequestHandler):
             elif parts == ["api", "mujoco", "health"]:
                 self._send(200, {"status": "ok", "engine": "MuJoCo", "runtimeVersion": RUNTIME_VERSION, "sourceVersion": MUJOCO_SOURCE_VERSION, "model": str(SOURCE_MODEL_PATH), "runtimeModel": str(SESSION.model_path), "urdf": str(URDF_PATH) if URDF_PATH else None, "renderer": "MuJoCo Renderer", "renderBackend": RENDER_BACKEND, "headless": RENDER_BACKEND in {"egl", "osmesa"}, "renderReady": RENDERER.render_ready, "python": sys.executable, "condaPrefix": os.environ.get("CONDA_PREFIX") or str(Path(sys.executable).resolve().parent), "timestamp": iso_now()})
             elif parts == ["api", "mujoco", "model"]:
-                self._send(200, {"name": "g1_mocap_29dof", "engine": "MuJoCo", "runtimeVersion": RUNTIME_VERSION, "sourceVersion": MUJOCO_SOURCE_VERSION, "nq": SESSION.model.nq, "nv": SESSION.model.nv, "jointCount": len(SESSION.joints), "modelPath": str(SOURCE_MODEL_PATH), "runtimeModelPath": str(SESSION.model_path), "urdfPath": str(URDF_PATH) if URDF_PATH else None, "geomCount": SESSION.model.ngeom, "joints": SESSION.joints})
+                self._send(200, {"robotId": ROBOT_ID, "name": MODEL_NAME, "engine": "MuJoCo", "runtimeVersion": RUNTIME_VERSION, "sourceVersion": MUJOCO_SOURCE_VERSION, "nq": SESSION.model.nq, "nv": SESSION.model.nv, "jointCount": len(SESSION.joints), "modelPath": str(SOURCE_MODEL_PATH), "runtimeModelPath": str(SESSION.model_path), "urdfPath": str(URDF_PATH) if URDF_PATH else None, "geomCount": SESSION.model.ngeom, "rootBody": ROOT_BODY, "joints": SESSION.joints})
             elif parts == ["api", "mujoco", "urdf"]:
                 self._send(200, urdf_payload())
             elif parts == ["api", "mujoco", "render"]:

@@ -26,8 +26,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.app.infrastructure.robot_registry import LocalRobotRegistry, RobotRegistryError
-from backend.app.runtime.registry import RuntimeRegistry
+from backend.app.infrastructure.robot_registry import LocalRobotRegistry, RobotRegistryError  # noqa: E402
+from backend.app.runtime.profiles import RUNTIME_PROFILES  # noqa: E402
+from backend.app.runtime.registry import RuntimeRegistry  # noqa: E402
 
 
 COMPOSE = ROOT / "infra" / "compose" / "docker-compose.staging.yml"
@@ -328,7 +329,7 @@ def _runtime_registry(args: argparse.Namespace) -> RuntimeRegistry:
 
 
 def _runtime_doctor(args: argparse.Namespace) -> int:
-    report = _runtime_registry(args).doctor(required_only=False)
+    report = _runtime_registry(args).doctor(required_only=False, profile=args.profile)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["status"] == "READY" else 1
 
@@ -392,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
     runtime_sub = runtime.add_subparsers(dest="runtime_command", required=True)
     runtime_doctor = runtime_sub.add_parser("doctor")
     runtime_doctor.add_argument("--runtime-dir", default=None)
+    runtime_doctor.add_argument("--profile", choices=tuple(RUNTIME_PROFILES), default=None)
     runtime_doctor.add_argument("--json", action="store_true")
     runtime_register = runtime_sub.add_parser("register")
     runtime_register.add_argument("name", choices=("gmr", "gvhmr", "isaac_lab", "isaac_sim", "unitree_rl_lab", "unitree_mujoco"))

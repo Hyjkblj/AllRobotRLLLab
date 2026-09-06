@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.runtime.contracts import RuntimeCheck, RuntimeUnavailable
+from backend.app.runtime.profiles import runtime_names
 
 
 @dataclass(frozen=True)
@@ -110,8 +111,12 @@ class RuntimeRegistry:
             errors.append(f"{spec.python_env} does not point to an executable: {python}")
         return RuntimeCheck(spec.name, True, not errors, path=str(path), revision=revision, expected_revision=expected_revision, python=python, errors=tuple(errors))
 
-    def doctor(self, *, required_only: bool = False) -> dict[str, Any]:
-        checks = [self.check(spec) for spec in self.SPECS if not required_only or spec.required]
+    def doctor(self, *, required_only: bool = False, profile: str | None = None) -> dict[str, Any]:
+        if profile is not None:
+            selected_names = set(runtime_names(profile))
+            checks = [self.check(spec) for spec in self.SPECS if spec.name in selected_names]
+        else:
+            checks = [self.check(spec) for spec in self.SPECS if not required_only or spec.required]
         failures = [check.as_dict() for check in checks if not check.available]
         manifest = None
         if self.manifest_path and self.manifest_path.is_file():
@@ -119,7 +124,44 @@ class RuntimeRegistry:
                 manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
             except (OSError, ValueError, TypeError):
                 failures.append({"name": "runtime_manifest", "status": "INVALID", "errors": ["manifest is not valid JSON"]})
-        return {"status": "READY" if not failures else "NOT_READY", "checks": [check.as_dict() for check in checks], "failures": failures, "manifest": manifest}
+            else:
+                manifest_failures = self._manifest_drift(manifest, checks)
+                if manifest_failures:
+                    failures.append({"name": "runtime_manifest", "status": "STALE", "errors": manifest_failures})
+        return {
+            "status": "READY" if not failures else "NOT_READY",
+            "profile": profile,
+            "checks": [check.as_dict() for check in checks],
+            "failures": failures,
+            "manifest": manifest,
+        }
+
+    def _manifest_drift(self, manifest: dict[str, Any], checks: list[RuntimeCheck]) -> list[str]:
+        errors: list[str] = []
+        repository = manifest.get("repository", {}) if isinstance(manifest, dict) else {}
+        root = Path(str(repository.get("root", ""))).expanduser() if isinstance(repository, dict) else Path()
+        expected_repo = str(repository.get("git_sha", "")).strip() if isinstance(repository, dict) else ""
+        if expected_repo and root.is_dir():
+            current_repo = self._git_revision(root)
+            if current_repo and current_repo != expected_repo:
+                errors.append(f"repository revision mismatch: expected {expected_repo}, got {current_repo}")
+        external = manifest.get("external", {}) if isinstance(manifest, dict) else {}
+        for check in checks:
+            item = external.get(check.name, {}) if isinstance(external, dict) else {}
+            if not isinstance(item, dict) or not check.available:
+                continue
+            expected = str(item.get("git_sha", "")).strip()
+            if expected and check.revision and check.revision != expected and not check.revision.startswith(expected):
+                errors.append(f"{check.name} revision differs from collected manifest: expected {expected}, got {check.revision}")
+            expected_source = str(item.get("source_sha256", "")).strip()
+            if expected_source and check.path:
+                try:
+                    current_source = self._source_hash(Path(check.path))
+                except OSError:
+                    continue
+                if current_source != expected_source:
+                    errors.append(f"{check.name} source content differs from collected manifest")
+        return errors
 
     def require(self, name: str) -> RuntimeCheck:
         spec = next((item for item in self.SPECS if item.name == name), None)

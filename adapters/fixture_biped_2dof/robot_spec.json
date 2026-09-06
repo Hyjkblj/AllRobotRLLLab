@@ -1,0 +1,33 @@
+{
+  "schema_version": "robot_spec.v1",
+  "robot_id": "fixture_biped_2dof",
+  "vendor": "AllRobotRLLLab",
+  "model": "Fixture Biped",
+  "model_version": "v1",
+  "adapter_version": "fixture_biped_adapter.v1",
+  "assets": {},
+  "joint_names": ["left_hip_joint", "right_hip_joint"],
+  "joints": [
+    {"name": "left_hip_joint", "qpos_address": 7, "axis": [0, 1, 0], "position_limit": [-1.5, 1.5], "torque_limit": 20},
+    {"name": "right_hip_joint", "qpos_address": 8, "axis": [0, 1, 0], "position_limit": [-1.5, 1.5], "torque_limit": 20}
+  ],
+  "body_names": ["pelvis"],
+  "dof": 2,
+  "default_root_height": 0.5,
+  "actuation": {
+    "mode": "position_pd",
+    "control_dt": 0.01,
+    "policy_dt": 0.02,
+    "action_scale": 0.5,
+    "kp_profile": "fixture_default",
+    "kd_profile": "fixture_default",
+    "torque_limits": [20, 20]
+  },
+  "capabilities": ["mimic"],
+  "action_modes": ["joint_position_delta"],
+  "isaac_task_ids": ["fixture_mimic"],
+  "default_scene_id": "fixture_flat",
+  "training_provider": "fake_smoke",
+  "sim2sim_adapter": "fixture_sim2sim",
+  "license": {"status": "internal_test_fixture", "source": "AllRobotRLLLab"}
+}

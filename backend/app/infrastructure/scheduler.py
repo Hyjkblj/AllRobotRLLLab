@@ -190,6 +190,12 @@ class LocalRunRecovery:
         return recovered
 
     def _attempt_alive(self, run_id: str, attempt, now: float) -> bool:
+        # External runners register their own process group. This marker is
+        # authoritative while a GPU child is alive, even when the worker's
+        # coarse process marker has not refreshed its heartbeat yet.
+        external_marker = self.runtime_root / "runs" / run_id / "external-process.json"
+        if self._marker_alive(external_marker):
+            return True
         marker = self.runtime_root / "runs" / run_id / "process.json"
         if marker.exists():
             try:
@@ -208,6 +214,18 @@ class LocalRunRecovery:
         except (TypeError, ValueError):
             return False
         return now - heartbeat <= self.stale_after_seconds
+
+    @staticmethod
+    def _marker_alive(marker: Path) -> bool:
+        try:
+            value = json.loads(marker.read_text(encoding="utf-8"))
+            pid = int(value.get("pid", 0))
+            if pid <= 0:
+                return False
+            os.kill(pid, 0)
+            return True
+        except (OSError, ProcessLookupError, PermissionError, SystemError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return False
 
 
 def _pid_alive(pid: int) -> bool:

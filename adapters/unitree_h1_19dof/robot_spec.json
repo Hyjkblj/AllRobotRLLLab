@@ -1,0 +1,59 @@
+{
+  "schema_version": "robot_spec.v1",
+  "robot_id": "unitree_h1_19dof",
+  "vendor": "Unitree",
+  "model": "H1",
+  "model_version": "menagerie_h1",
+  "adapter_version": "unitree_h1_adapter.v1",
+  "assets": {
+    "mujoco_xml_uri": "third_party/mujoco_menagerie-main/unitree_h1/h1.xml"
+  },
+  "joint_names": [
+    "left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee", "left_ankle",
+    "right_hip_yaw", "right_hip_roll", "right_hip_pitch", "right_knee", "right_ankle",
+    "torso",
+    "left_shoulder_pitch", "left_shoulder_roll", "left_shoulder_yaw", "left_elbow",
+    "right_shoulder_pitch", "right_shoulder_roll", "right_shoulder_yaw", "right_elbow"
+  ],
+  "joints": [
+    {"name": "left_hip_yaw", "qpos_address": 7, "axis": [0, 0, 1], "position_limit": [-0.43, 0.43], "torque_limit": 200},
+    {"name": "left_hip_roll", "qpos_address": 8, "axis": [1, 0, 0], "position_limit": [-0.43, 0.43], "torque_limit": 200},
+    {"name": "left_hip_pitch", "qpos_address": 9, "axis": [0, 1, 0], "position_limit": [-1.57, 1.57], "torque_limit": 200},
+    {"name": "left_knee", "qpos_address": 10, "axis": [0, 1, 0], "position_limit": [-0.26, 2.05], "torque_limit": 300},
+    {"name": "left_ankle", "qpos_address": 11, "axis": [0, 1, 0], "position_limit": [-0.87, 0.52], "torque_limit": 40},
+    {"name": "right_hip_yaw", "qpos_address": 12, "axis": [0, 0, 1], "position_limit": [-0.43, 0.43], "torque_limit": 200},
+    {"name": "right_hip_roll", "qpos_address": 13, "axis": [1, 0, 0], "position_limit": [-0.43, 0.43], "torque_limit": 200},
+    {"name": "right_hip_pitch", "qpos_address": 14, "axis": [0, 1, 0], "position_limit": [-1.57, 1.57], "torque_limit": 200},
+    {"name": "right_knee", "qpos_address": 15, "axis": [0, 1, 0], "position_limit": [-0.26, 2.05], "torque_limit": 300},
+    {"name": "right_ankle", "qpos_address": 16, "axis": [0, 1, 0], "position_limit": [-0.87, 0.52], "torque_limit": 40},
+    {"name": "torso", "qpos_address": 17, "axis": [0, 0, 1], "position_limit": [-2.35, 2.35], "torque_limit": 200},
+    {"name": "left_shoulder_pitch", "qpos_address": 18, "axis": [0, 1, 0], "position_limit": [-2.87, 2.87], "torque_limit": 40},
+    {"name": "left_shoulder_roll", "qpos_address": 19, "axis": [1, 0, 0], "position_limit": [-0.34, 3.11], "torque_limit": 40},
+    {"name": "left_shoulder_yaw", "qpos_address": 20, "axis": [0, 0, 1], "position_limit": [-1.3, 4.45], "torque_limit": 18},
+    {"name": "left_elbow", "qpos_address": 21, "axis": [0, 1, 0], "position_limit": [-1.25, 2.61], "torque_limit": 18},
+    {"name": "right_shoulder_pitch", "qpos_address": 22, "axis": [0, 1, 0], "position_limit": [-2.87, 2.87], "torque_limit": 40},
+    {"name": "right_shoulder_roll", "qpos_address": 23, "axis": [1, 0, 0], "position_limit": [-3.11, 0.34], "torque_limit": 40},
+    {"name": "right_shoulder_yaw", "qpos_address": 24, "axis": [0, 0, 1], "position_limit": [-4.45, 1.3], "torque_limit": 18},
+    {"name": "right_elbow", "qpos_address": 25, "axis": [0, 1, 0], "position_limit": [-1.25, 2.61], "torque_limit": 18}
+  ],
+  "body_names": ["pelvis", "torso_link", "left_ankle_link", "right_ankle_link", "left_elbow_link", "right_elbow_link"],
+  "dof": 19,
+  "default_root_height": 1.05,
+  "actuation": {
+    "mode": "position_pd",
+    "control_dt": 0.005,
+    "policy_dt": 0.02,
+    "action_scale": 0.25,
+    "kp_profile": "h1_default",
+    "kd_profile": "h1_default",
+    "torque_limits": [200, 200, 200, 300, 40, 200, 200, 200, 300, 40, 200, 40, 40, 18, 18, 40, 40, 18, 18]
+  },
+  "capabilities": ["mimic", "direct_trajectory"],
+  "action_modes": ["joint_position_delta"],
+  "gmr_mapping_version": "gmr_h1.v1",
+  "isaac_task_ids": ["h1_mimic"],
+  "default_scene_id": "h1_flat",
+  "training_provider": "native_isaac_lab",
+  "sim2sim_adapter": "mujoco_h1",
+  "license": {"status": "research_only", "source": "MuJoCo Menagerie / Unitree H1"}
+}

@@ -6,6 +6,8 @@ import os
 import json
 from pathlib import Path
 
+from backend.app.runtime.profiles import infer_profile, runtime_names
+
 
 class Settings:
     def __init__(self) -> None:
@@ -22,6 +24,11 @@ class Settings:
         self.p3_backend = os.getenv("P3_BACKEND", "fake_smoke").strip().lower()
         self.platform_role = os.getenv("PLATFORM_ROLE", "api").strip().lower()
         self.require_external_runtime = os.getenv("REQUIRE_EXTERNAL_RUNTIME", "").strip().lower() == "true" or self.platform_role in {"gpu", "worker-gpu"}
+        self.runtime_profile = infer_profile(
+            platform_role=self.platform_role,
+            p3_backend=self.p3_backend,
+            explicit=os.getenv("RUNTIME_PROFILE", "").strip().lower() or None,
+        )
         self.database_url = os.getenv("DATABASE_URL")
         self.redis_url = os.getenv("REDIS_URL")
         self.minio_endpoint = os.getenv("MINIO_ENDPOINT")
@@ -56,13 +63,19 @@ class Settings:
         self.gvhmr_python = os.getenv("GVHMR_PYTHON", "").strip() or registered_python("gvhmr")
         self.isaac_python = os.getenv("ISAAC_PYTHON", "").strip() or registered_python("isaac_lab")
         self.sim2sim_python = os.getenv("SIM2SIM_PYTHON", "").strip() or registered_python("unitree_mujoco")
+        # ``G1_MJCF_PATH`` remains a backwards-compatible alias. New robot
+        # adapters should expose their model through ``MOTIONLAB_MODEL_PATH``
+        # or their own adapter-specific environment variable.
         self.g1_mjcf_path = os.getenv("G1_MJCF_PATH", "").strip()
+        self.motion_model_path = os.getenv("MOTIONLAB_MODEL_PATH", "").strip() or self.g1_mjcf_path
+        raw_adapter_modules = os.getenv("ROBOT_ADAPTER_MODULES", "adapters.unitree_g1_29dof")
+        self.robot_adapter_modules = tuple(item.strip() for item in raw_adapter_modules.split(",") if item.strip())
 
     @property
     def is_deployed(self) -> bool:
         return self.app_env in {"staging", "production"}
 
-    def deployment_errors(self) -> list[str]:
+    def deployment_errors(self, *, robot_registry=None) -> list[str]:
         """Return actionable errors for a staging/production process.
 
         Development and contract-test imports deliberately remain dependency
@@ -93,16 +106,45 @@ class Settings:
             errors.append("WORKER_AUTH_TOKEN still contains a development placeholder")
         if self.p3_backend == "fake_smoke":
             errors.append("P3_BACKEND must select a real Isaac/Unitree backend in staging/production; fake_smoke is development-only")
-        if self.require_external_runtime and self.p3_backend in {"isaac_lab", "unitree_rl_lab"} and not self.isaac_lab_path:
-            errors.append("ISAACLAB_PATH is required for the Isaac Lab P3 backend")
-        if self.require_external_runtime and self.p3_backend in {"isaac_lab", "unitree_rl_lab"} and not self.unitree_rl_lab_path:
-            errors.append("UNITREE_RL_LAB_PATH is required for the Unitree RL Lab training backend")
-        if self.require_external_runtime and self.p3_backend in {"gmr_gvhmr", "isaac_lab", "unitree_rl_lab"} and not self.gmr_path:
-            errors.append("GMR_PATH is required for motion retargeting")
-        if self.require_external_runtime and self.p3_backend in {"gmr_gvhmr", "isaac_lab", "unitree_rl_lab"} and not self.gvhmr_path:
-            errors.append("GVHMR_PATH is required for video motion processing")
-        if self.require_external_runtime and self.p3_backend in {"unitree_mujoco", "isaac_lab", "unitree_rl_lab"} and not self.unitree_mujoco_path:
-            errors.append("UNITREE_MUJOCO_PATH is required for the sim2sim P3 backend")
+        if self.require_external_runtime or runtime_names(self.runtime_profile):
+            runtime_paths = {
+                "gmr": self.gmr_path,
+                "gvhmr": self.gvhmr_path,
+                "isaac_lab": self.isaac_lab_path,
+                "isaac_sim": self.isaac_sim_path,
+                "unitree_rl_lab": self.unitree_rl_lab_path,
+                "unitree_mujoco": self.unitree_mujoco_path,
+            }
+            for runtime in runtime_names(self.runtime_profile):
+                if not runtime_paths[runtime]:
+                    errors.append(f"{runtime.upper()} runtime is required for profile '{self.runtime_profile}'")
+        # The compiler is a platform-owned safety boundary. A deployed motion
+        # worker must validate every registered adapter's own model instead of
+        # requiring a G1-specific environment variable in the generic layer.
+        if self.is_deployed and self.runtime_profile in {"motion-cpu", "motion-gpu", "gpu"}:
+            if robot_registry is None:
+                # Compatibility for callers that only have Settings. The API
+                # composition root passes the registry and takes the scoped
+                # branch below.
+                if not self.motion_model_path:
+                    errors.append("MOTIONLAB_MODEL_PATH (or legacy G1_MJCF_PATH) is required for deployed motion compilation")
+                elif not Path(self.motion_model_path).expanduser().is_file():
+                    errors.append(f"MOTIONLAB_MODEL_PATH does not point to a file: {self.motion_model_path}")
+            else:
+                try:
+                    adapters = robot_registry.list()
+                except Exception as exc:
+                    errors.append(f"robot adapter registry could not be inspected: {exc}")
+                    adapters = ()
+                for adapter in adapters:
+                    try:
+                        result = adapter.self_check()
+                    except Exception as exc:
+                        errors.append(f"{getattr(adapter, 'name', 'robot')} self-check failed: {exc}")
+                        continue
+                    if not result.valid:
+                        first = result.issues[0].message if result.issues else "RobotSpec self-check failed"
+                        errors.append(f"{getattr(adapter, 'name', 'robot')} self-check failed: {first}")
         return errors
 
 

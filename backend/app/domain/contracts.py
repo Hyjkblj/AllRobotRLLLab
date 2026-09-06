@@ -373,10 +373,17 @@ class RobotSpec(ContractModel):
     joints: list[JointSpec] = Field(min_length=1)
     body_names: list[str] = Field(min_length=1)
     dof: int = Field(gt=0)
+    # Nominal root height used when an input trajectory omits a root pose.
+    # Keeping it in RobotSpec avoids vendor-specific constants in generic
+    # motion processing.
+    default_root_height: float = Field(default=0.75, gt=0, le=5)
     actuation: ActuationSpec
     capabilities: list[str] = Field(default_factory=list)
+    action_modes: list[str] = Field(default_factory=lambda: ["joint_position_delta"])
     gmr_mapping_version: str | None = None
     isaac_task_ids: list[str] = Field(default_factory=list)
+    default_scene_id: str | None = None
+    training_provider: str | None = None
     sim2sim_adapter: str = Field(min_length=1)
     license: LicenseInfo
 
@@ -406,7 +413,7 @@ class SourceMotionDescriptor(ContractModel):
     schema_version: Literal[SchemaVersion.SOURCE_MOTION] = SchemaVersion.SOURCE_MOTION
     asset_version_id: str = Field(min_length=1)
     file_format: Literal["pt", "npz", "csv", "pkl"]
-    detected_type: Literal["g1_joint_trajectory", "human_pose", "gvhmr_result", "unsupported"]
+    detected_type: Literal["joint_trajectory", "g1_joint_trajectory", "human_pose", "gvhmr_result", "unsupported"]
     source_skeleton: str | None = None
     fields: dict[str, ArrayField] = Field(default_factory=dict)
     joint_names: list[str] = Field(default_factory=list)
@@ -631,15 +638,15 @@ class ObservationConfig(ContractModel):
 
 
 class ActionConfig(ContractModel):
-    mode: Literal["joint_position_delta"] = "joint_position_delta"
+    mode: str = Field(default="joint_position_delta", min_length=1)
     scale: float = Field(default=0.25, gt=0, le=2)
     clip: float = Field(default=1.0, gt=0, le=10)
 
 
 class ControlConfig(ContractModel):
     decimation: int = Field(default=1, ge=1, le=16)
-    kp_profile: str = "g1_default"
-    kd_profile: str = "g1_default"
+    kp_profile: str = "default"
+    kd_profile: str = "default"
 
 
 class PPOConfig(ContractModel):
@@ -676,8 +683,11 @@ class ResourceRequest(ContractModel):
 
 class TrainingConfig(ContractModel):
     schema_version: Literal[SchemaVersion.TRAINING_CONFIG] = SchemaVersion.TRAINING_CONFIG
-    task_id: Literal["g1_mimic"] = "g1_mimic"
-    scene_id: str = "g1_flat"
+    # Task and scene are resolved against the selected robot's TaskRegistry by
+    # the application service. Keeping them optional lets the API schema stay
+    # robot-neutral while still accepting explicit values from clients.
+    task_id: str | None = Field(default=None, min_length=1)
+    scene_id: str | None = Field(default=None, min_length=1)
     motion_asset_version_id: str = Field(min_length=1)
     observation: ObservationConfig = Field(default_factory=ObservationConfig)
     action: ActionConfig = Field(default_factory=ActionConfig)

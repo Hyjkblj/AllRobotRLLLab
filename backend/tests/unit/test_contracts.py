@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import numpy as np
 
 from adapters.unitree_g1_29dof import UnitreeG1Adapter
 from backend.app.application.reward_catalog import default_reward_config, validate_reward_config
@@ -32,8 +31,8 @@ def test_manifest_freeze_uses_canonical_hash() -> None:
 
 
 def test_safety_terminations_cannot_be_removed() -> None:
-    config = default_reward_config().model_copy(update={"terminations": ["timeout"]})
-    result = validate_reward_config(config)
+    config = default_reward_config(robot_id="unitree_g1_29dof", task_id="g1_mimic").model_copy(update={"terminations": ["timeout"]})
+    result = validate_reward_config(config, robot_id="unitree_g1_29dof", task_id="g1_mimic")
     assert not result.valid
     assert any(issue.code == "SAFETY_TERMINATION_REQUIRED" for issue in result.issues)
 

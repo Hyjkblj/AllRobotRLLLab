@@ -1,4 +1,4 @@
-from backend.app.application.outbox_dispatcher import OutboxDispatcher
+from backend.app.application.outbox_dispatcher import OutboxDispatcher, ROUTE_BY_TOPIC
 from backend.app.application.run_service import RunService
 from backend.app.domain.contracts import Actor
 from backend.app.infrastructure.memory import InMemoryUnitOfWork
@@ -15,4 +15,17 @@ def test_outbox_dispatcher_publishes_and_marks_events() -> None:
     bridge = OutboxDispatcher(uow, dispatcher)
     assert bridge.dispatch() >= 1
     assert not uow.outbox.pending()
-    assert dispatcher.pending()
+    queued = dispatcher.pending()
+    assert queued
+    assert queued[0].task == "allrobotrl.runs.created"
+    assert queued[0].queue == "motion-cpu"
+
+
+def test_every_outbox_topic_maps_to_a_registered_celery_name() -> None:
+    assert ROUTE_BY_TOPIC == {
+        "assets.uploading": ("asset-io", "allrobotrl.assets.uploading"),
+        "assets.validate": ("asset-io", "allrobotrl.assets.validate"),
+        "runs.created": ("motion-cpu", "allrobotrl.runs.created"),
+        "runs.retry": ("isaac-gpu", "allrobotrl.runs.retry"),
+        "runs.cancelled": ("maintenance", "allrobotrl.runs.cancelled"),
+    }

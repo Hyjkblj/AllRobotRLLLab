@@ -10,10 +10,13 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Protocol
 
 import numpy as np
@@ -28,6 +31,7 @@ from backend.app.domain.contracts import (
     ValidationSeverity,
 )
 from backend.app.domain.motion import MotionArrays
+from backend.app.infrastructure.local_file import FileLock
 
 
 COMPILER_VERSION = "motion-editor.v1"
@@ -130,7 +134,7 @@ def _apply_keyframes(joint_pos: np.ndarray, keyframes: list[dict], frame_count: 
             continue
         array = np.asarray(values, dtype=np.float64)
         if array.shape != (joint_pos.shape[1],):
-            issues.append(_issue("KEYFRAME_SHAPE_INVALID", "keyframe pose must cover every G1 joint", field=f"keyframes[{index}]", actual=list(array.shape), expected=[joint_pos.shape[1]]))
+            issues.append(_issue("KEYFRAME_SHAPE_INVALID", "keyframe pose must cover every robot joint", field=f"keyframes[{index}]", actual=list(array.shape), expected=[joint_pos.shape[1]]))
             continue
         points.append((frame, array))
     points.sort(key=lambda item: item[0])
@@ -158,7 +162,7 @@ class MotionEditor:
         if arrays.quat_convention != "xyzw":
             issues.append(_issue("QUATERNION_CONVENTION_UNSUPPORTED", "motion editor expects external xyzw quaternions", field="quat_convention", actual=arrays.quat_convention, expected="xyzw"))
         if arrays.joint_pos.ndim != 2 or arrays.joint_pos.shape[1] != self.robot.dof:
-            issues.append(_issue("MOTION_DOF_MISMATCH", "joint_pos must have the G1 29 DoF shape", field="joint_pos.shape", actual=list(arrays.joint_pos.shape), expected=["N", self.robot.dof]))
+            issues.append(_issue("MOTION_DOF_MISMATCH", f"joint_pos must have the {self.robot.dof} DoF shape", field="joint_pos.shape", actual=list(arrays.joint_pos.shape), expected=["N", self.robot.dof]))
         if tuple(arrays.joint_names) != tuple(self.robot.joint_names):
             issues.append(_issue("MOTION_JOINT_ORDER_MISMATCH", "joint order does not match RobotSpec", field="joint_names", actual=list(arrays.joint_names), expected=self.robot.joint_names))
         if arrays.root_pos.shape != (len(arrays.joint_pos), 3) or arrays.root_rot.shape != (len(arrays.joint_pos), 4):
@@ -187,7 +191,7 @@ class MotionEditor:
 
         for index, offset in enumerate(config.joint_offsets):
             if offset.joint_name not in self.robot.joint_names:
-                issues.append(_issue("JOINT_NOT_FOUND", "joint offset references an unknown G1 joint", field=f"joint_offsets[{index}].joint_name", actual=offset.joint_name))
+                issues.append(_issue("JOINT_NOT_FOUND", f"joint offset references an unknown {self.robot.robot_id} joint", field=f"joint_offsets[{index}].joint_name", actual=offset.joint_name))
                 continue
             if offset.frame_start >= len(edited.joint_pos):
                 issues.append(_issue("JOINT_OFFSET_OUT_OF_RANGE", "joint offset starts outside the motion", field=f"joint_offsets[{index}].frame_start", actual=offset.frame_start, expected=[0, len(edited.joint_pos) - 1]))
@@ -234,7 +238,7 @@ class MotionEditor:
             total = max(1, candidate.joint_pos.size)
             limit_ratio = limit_violations / total
             if limit_violations:
-                issues.append(_issue("JOINT_LIMIT_VIOLATION", "edited trajectory exceeds a hard G1 joint limit", field="joint_pos", actual=limit_ratio, expected=0.0))
+                issues.append(_issue("JOINT_LIMIT_VIOLATION", f"edited trajectory exceeds a hard {self.robot.robot_id} joint limit", field="joint_pos", actual=limit_ratio, expected=0.0))
             if np.min(candidate.root_pos[:, 2]) < -1e-6:
                 issues.append(_issue("GROUND_PENETRATION", "root trajectory goes below the ground plane", field="root_pos[:,2]", actual=float(np.min(candidate.root_pos[:, 2]),), expected=0.0))
             normalized, invalid = _normalize_quaternions(candidate.root_rot)
@@ -257,36 +261,57 @@ class MotionEditor:
 
 
 class MotionEditVersionStore:
-    """Thread-safe in-memory repository used until the P2 database port lands."""
+    """Immutable edit-version repository with optional durable JSON storage.
 
-    def __init__(self) -> None:
+    The JSON mode is used by the local/shared-runtime deployment profile. It
+    keeps the application contract independent from PostgreSQL while ensuring
+    API restarts do not discard edit history. A process lock serializes
+    writers when API instances share the same runtime volume.
+    """
+
+    def __init__(self, *, storage_path: Path | None = None) -> None:
         self._lock = threading.RLock()
         self._versions: dict[str, MotionEditVersion] = {}
         self._by_source: dict[str, list[str]] = {}
+        self.storage_path = Path(storage_path).expanduser().resolve() if storage_path else None
+        self._file_lock = FileLock(self.storage_path.with_suffix(self.storage_path.suffix + ".lock")) if self.storage_path else None
+        if self.storage_path is not None:
+            self._load()
 
     def create(self, config: MotionEditConfig, *, parent_version_id: str | None = None) -> MotionEditVersion:
         with self._lock:
-            parent = self._versions.get(parent_version_id) if parent_version_id else None
-            if parent and (parent.source_motion_version_id != config.source_motion_version_id or parent.robot_id != config.robot_id):
-                raise ValueError("parent motion edit belongs to a different source or robot")
-            source_versions = self._by_source.setdefault(config.source_motion_version_id, [])
-            version = len(source_versions) + 1
-            version_id = str(uuid.uuid4())
-            record = MotionEditVersion(version_id=version_id, source_motion_version_id=config.source_motion_version_id, robot_id=config.robot_id, version=version, config=config, config_sha256=_canonical_hash(config.model_dump(mode="json")), parent_version_id=parent_version_id, created_at=datetime.now(timezone.utc).isoformat())
-            self._versions[version_id] = record
-            source_versions.append(version_id)
-            return record
+            guard = self._file_lock or _NullLock()
+            with guard:
+                # Another API process may have committed a version since this
+                # instance was initialized. Reload before calculating the
+                # monotonic source-local version number.
+                if self.storage_path is not None:
+                    self._load()
+                parent = self._versions.get(parent_version_id) if parent_version_id else None
+                if parent and (parent.source_motion_version_id != config.source_motion_version_id or parent.robot_id != config.robot_id):
+                    raise ValueError("parent motion edit belongs to a different source or robot")
+                source_versions = self._by_source.setdefault(config.source_motion_version_id, [])
+                version = len(source_versions) + 1
+                version_id = str(uuid.uuid4())
+                record = MotionEditVersion(version_id=version_id, source_motion_version_id=config.source_motion_version_id, robot_id=config.robot_id, version=version, config=config, config_sha256=_canonical_hash(config.model_dump(mode="json")), parent_version_id=parent_version_id, created_at=datetime.now(timezone.utc).isoformat())
+                self._versions[version_id] = record
+                source_versions.append(version_id)
+                self._persist()
+                return record
 
     def get(self, version_id: str) -> MotionEditVersion | None:
         with self._lock:
+            self._refresh()
             return self._versions.get(version_id)
 
     def list_for_source(self, source_motion_version_id: str) -> list[MotionEditVersion]:
         with self._lock:
+            self._refresh()
             return [self._versions[item] for item in self._by_source.get(source_motion_version_id, [])]
 
     def restore(self, current_version_id: str, target_version_id: str) -> MotionEditVersion:
         with self._lock:
+            self._refresh()
             current = self._versions.get(current_version_id)
             target = self._versions.get(target_version_id)
             if current is None or target is None:
@@ -294,6 +319,53 @@ class MotionEditVersionStore:
             if current.source_motion_version_id != target.source_motion_version_id or current.robot_id != target.robot_id:
                 raise ValueError("motion edit versions must belong to the same source and robot")
             return self.create(target.config, parent_version_id=current.version_id)
+
+    def _load(self) -> None:
+        assert self.storage_path is not None
+        self._versions.clear()
+        self._by_source.clear()
+        if not self.storage_path.is_file():
+            return
+        try:
+            values = json.loads(self.storage_path.read_text(encoding="utf-8"))
+            if not isinstance(values, list):
+                raise ValueError("motion edit store must contain a JSON list")
+            for value in values:
+                record = MotionEditVersion.model_validate(value)
+                self._versions[record.version_id] = record
+                self._by_source.setdefault(record.source_motion_version_id, []).append(record.version_id)
+        except (OSError, ValueError, TypeError) as exc:
+            raise RuntimeError(f"unable to load motion edit store: {self.storage_path}") from exc
+
+    def _persist(self) -> None:
+        if self.storage_path is None:
+            return
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps([record.model_dump(mode="json") for record in self._versions.values()], ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        descriptor, temporary_name = tempfile.mkstemp(prefix=".motion-edits.", suffix=".tmp", dir=self.storage_path.parent)
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.storage_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _refresh(self) -> None:
+        if self.storage_path is None:
+            return
+        with (self._file_lock or _NullLock()):
+            self._load()
+
+
+class _NullLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return None
 
 
 __all__ = ["MotionArrays", "MotionEditResult", "MotionEditVersionStore", "MotionEditor"]

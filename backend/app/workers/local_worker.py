@@ -15,22 +15,21 @@ import time
 from pathlib import Path
 from typing import Any
 
-from adapters.unitree_g1_29dof import UnitreeG1Adapter
 from backend.app.application.artifact_service import ArtifactService
 from backend.app.application.run_service import RunService
 from backend.app.application.training_service import TrainingService
 from backend.app.application.asset_service import AssetService
 from backend.app.application.outbox_dispatcher import OutboxDispatcher
 from backend.app.application.motion_pipeline_service import MotionPipelineService, MotionPipelineStore
+from backend.app.application.reward_catalog import RewardConfigVersionStore, RewardRegistry
 from backend.app.adapters.motion import MotionSourceRegistry
-from backend.app.application.motion_editor import MotionEditor
+from backend.app.application.platform_assembly import build_platform_assembly
 from backend.app.config.settings import settings
 from backend.app.infrastructure.local import build_object_store
 from backend.app.infrastructure.local_file import LocalFileUnitOfWork
 from backend.app.infrastructure.queue import LocalFileTaskDispatcher
 from backend.app.infrastructure.scheduler import LocalRunRecovery
 from backend.app.workers.p3_tasks import P3TaskExecutor
-from backend.app.runtime.factory import build_runtime_adapters
 
 
 def build_executor() -> tuple[LocalFileTaskDispatcher, P3TaskExecutor]:
@@ -40,22 +39,36 @@ def build_executor() -> tuple[LocalFileTaskDispatcher, P3TaskExecutor]:
     run_service = RunService(uow)
     object_store = build_object_store(settings)
     artifact_service = ArtifactService(uow, object_store)
-    adapter = UnitreeG1Adapter(repository_root=settings.repository_root)
-    runtime_adapters = build_runtime_adapters(settings, workspace=settings.runtime_root / "external")
-    training_runner = runtime_adapters["isaac"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab"} else None
-    sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "unitree_mujoco"} else None
-    training_service = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter)
+    assembly = build_platform_assembly(settings, workspace=settings.runtime_root / "external")
+    deployment_errors = settings.deployment_errors(robot_registry=assembly.robot_registry)
+    if deployment_errors:
+        raise RuntimeError("Invalid worker deployment configuration: " + "; ".join(deployment_errors))
+    robot_registry = assembly.robot_registry
+    adapter = assembly.default_adapter
+    task_registry = assembly.task_registry
+    runtime_adapters = assembly.runtime_adapters
+    training_runner = runtime_adapters["providers"].get(settings.p3_backend) if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_rl_lab"} else None
+    if settings.p3_backend == "isaac_lab":
+        training_runner = runtime_adapters["providers"].get("native_isaac_lab")
+    sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_rl_lab", "unitree_mujoco"} else None
+    training_providers = runtime_adapters["providers"] if settings.p3_backend != "fake_smoke" else {}
+    sim2sim_adapters = runtime_adapters["sim2sim_adapters"] if settings.p3_backend != "fake_smoke" else {}
+    reward_config_store = RewardConfigVersionStore(RewardRegistry(), storage_path=settings.runtime_root / "reward_configs.json")
+    training_service = TrainingService(run_service=run_service, robot_adapter=adapter, robot_registry=robot_registry, task_registry=task_registry, training_providers=training_providers, sim2sim_adapters=sim2sim_adapters, training_provider_registry=runtime_adapters.get("training_provider_registry"), sim2sim_registry=runtime_adapters.get("sim2sim_registry"), workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter, reward_config_store=reward_config_store)
     motion_pipeline_service = MotionPipelineService(
         uow=uow,
         object_store=object_store,
         robot_adapter=adapter,
         motion_registry=MotionSourceRegistry(),
-        motion_editor=MotionEditor(adapter.get_spec(), ik_solver=adapter.create_ik_solver()),
+        motion_editor=assembly.motion_editors[adapter.name],
         asset_service=AssetService(uow, object_store),
         store=MotionPipelineStore(settings.runtime_root / "motion_pipelines"),
         kinematics_compiler=runtime_adapters["compiler"],
         gvhmr_runner=runtime_adapters["gvhmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
         gmr_runner=runtime_adapters["gmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
+        robot_registry=robot_registry,
+        motion_editors=assembly.motion_editors,
+        kinematics_compilers=runtime_adapters.get("kinematics_compilers", {}),
     )
     return LocalFileTaskDispatcher(settings.runtime_root / "scheduler"), P3TaskExecutor(training_service, motion_pipeline_service)
 
@@ -92,15 +105,15 @@ def _operation_for_task(task: str) -> str:
     value = task.rsplit(".", 1)[-1].strip().lower()
     if task == "assets.validate" or (value == "validate" and task.startswith("allrobotrl.assets")):
         return "asset_validate"
-    if task == "assets.uploading":
+    if task in {"assets.uploading", "allrobotrl.assets.uploading"}:
         return "asset_uploading"
     if task == "allrobotrl.motion.process" or value == "process":
         return "motion_process"
-    if task == "runs.created":
+    if task in {"runs.created", "allrobotrl.runs.created"}:
         return "run_validate"
-    if task == "runs.retry":
+    if task in {"runs.retry", "allrobotrl.runs.retry"}:
         return "retry"
-    if task == "runs.cancelled":
+    if task in {"runs.cancelled", "allrobotrl.runs.cancelled"}:
         return "cancelled"
     if value not in {"train", "export", "sim2sim"}:
         raise ValueError(f"unsupported local task: {task}")

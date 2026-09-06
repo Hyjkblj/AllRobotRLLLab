@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from dataclasses import dataclass
 
@@ -12,14 +13,14 @@ from backend.app.domain.contracts import SeedEvaluation, Sim2SimReport, Sim2SimT
 
 @dataclass(frozen=True)
 class FakeSim2SimAdapter:
-    name: str = "unitree_g1_mujoco_smoke"
+    name: str = "generic_sim2sim_smoke"
     backend: str = "fake_smoke"
 
     def evaluate(self, seed: int) -> SeedEvaluation:
         started = time.perf_counter()
         spread = (seed % 7) * 0.001
         metrics = {"survival_rate": 0.98 - spread, "joint_rmse_rad": 0.12 + spread / 2, "root_position_rmse_m": 0.06 + spread / 4, "orientation_error_deg": 6.0 + spread * 10, "saturation_ratio": 0.01 + spread / 10, "foot_slip_mps": 0.04 + spread / 10}
-        return SeedEvaluation(seed=seed, status="PASSED", exit_code=0, duration_seconds=time.perf_counter() - started, metrics=metrics, command=["unitree_g1_mujoco", "--seed", str(seed), "--smoke"])
+        return SeedEvaluation(seed=seed, status="PASSED", exit_code=0, duration_seconds=time.perf_counter() - started, metrics=metrics, command=[self.name, "--seed", str(seed), "--smoke"])
 
 
 def build_sim2sim_report(*, run_id: str, adapter: str, backend: str, evaluations: list[SeedEvaluation], thresholds: Sim2SimThresholds | None = None) -> Sim2SimReport:
@@ -31,6 +32,10 @@ def build_sim2sim_report(*, run_id: str, adapter: str, backend: str, evaluations
         metrics = evaluation.metrics
         if evaluation.status != "PASSED" or evaluation.exit_code != 0:
             failures.append(f"SEED_{evaluation.seed}_PROCESS_FAILED")
+        for name in ("survival_rate", "joint_rmse_rad", "root_position_rmse_m", "orientation_error_deg", "saturation_ratio", "foot_slip_mps"):
+            value = metrics.get(name)
+            if value is None or not math.isfinite(value):
+                failures.append(f"SEED_{evaluation.seed}_METRIC_INVALID_{name}")
         if metrics.get("survival_rate", 0.0) < policy.min_survival_rate:
             failures.append(f"SEED_{evaluation.seed}_SURVIVAL_LOW")
         if metrics.get("joint_rmse_rad", float("inf")) > policy.max_joint_rmse_rad:
@@ -47,6 +52,8 @@ def build_sim2sim_report(*, run_id: str, adapter: str, backend: str, evaluations
         for name in ("survival_rate", "joint_rmse_rad", "root_position_rmse_m", "orientation_error_deg", "saturation_ratio", "foot_slip_mps"):
             values = [evaluation.metrics[name] for evaluation in evaluations if name in evaluation.metrics]
             if len(values) == len(evaluations):
+                if not all(math.isfinite(value) for value in values):
+                    continue
                 denominator = max(abs(sum(values) / len(values)), 1e-9)
                 if (max(values) - min(values)) / denominator > policy.max_seed_metric_spread:
                     failures.append(f"SEED_SPREAD_HIGH_{name}")

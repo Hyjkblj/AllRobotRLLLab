@@ -6,7 +6,6 @@ know about HTTP, persistence, Celery, or Isaac imports.
 
 from __future__ import annotations
 
-import json
 import hashlib
 import os
 import math
@@ -29,6 +28,8 @@ class UnitreeG1Adapter:
     """Validate the repository G1 29 DoF assets against the published spec."""
 
     name = "unitree_g1_29dof"
+    # Identifier expected by the external GMR command-line tools.
+    gmr_robot = "unitree_g1"
 
     def __init__(self, *, repository_root: Path | None = None, spec_path: Path | None = None) -> None:
         root = repository_root or Path(__file__).resolve().parents[2]
@@ -44,7 +45,19 @@ class UnitreeG1Adapter:
 
         from .ik_solver import G1MuJoCoIKSolver
 
-        return G1MuJoCoIKSolver(repository_root=self.repository_root)
+        return G1MuJoCoIKSolver(repository_root=self.repository_root, xml_path=self._asset_path("mujoco_xml_uri"))
+
+    def create_kinematics_compiler(self, *, allow_approximation: bool = False):
+        """Create the optional MuJoCo compiler for this adapter's model."""
+
+        from backend.app.runtime.mujoco_kinematics import MuJoCoKinematicsCompiler
+
+        return MuJoCoKinematicsCompiler(
+            model_path=self._asset_path("mujoco_xml_uri"),
+            body_names=self._spec.body_names,
+            joint_names=self._spec.joint_names,
+            allow_approximation=allow_approximation,
+        )
 
     def _asset_path(self, key: str) -> Path:
         value = self._spec.assets[key]

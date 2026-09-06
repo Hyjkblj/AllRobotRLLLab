@@ -18,9 +18,9 @@ class G1MuJoCoIKSolver:
     first frame of each requested range.
     """
 
-    def __init__(self, *, repository_root: Path | None = None) -> None:
+    def __init__(self, *, repository_root: Path | None = None, xml_path: Path | None = None) -> None:
         self.repository_root = (repository_root or Path(__file__).resolve().parents[2]).resolve()
-        self.xml_path = self.repository_root / "third_party" / "GMR-master" / "assets" / "unitree_g1" / "g1_mocap_29dof.xml"
+        self.xml_path = (Path(xml_path).expanduser().resolve() if xml_path is not None else self.repository_root / "third_party" / "GMR-master" / "assets" / "unitree_g1" / "g1_mocap_29dof.xml")
 
     @staticmethod
     def _xyzw_to_wxyz(quaternion: np.ndarray) -> np.ndarray:

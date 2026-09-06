@@ -22,6 +22,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Support the documented ``python scripts/...`` entry point.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.app.runtime.profiles import RUNTIME_PROFILES, infer_profile, runtime_names  # noqa: E402
+
 
 PINNED_PATHS = {
     "ISAACLAB_PATH": "isaac_lab",
@@ -109,7 +116,38 @@ def _asset_identity(root: Path) -> dict[str, Any]:
     return result
 
 
-def collect(root: Path) -> dict[str, Any]:
+def _robot_asset_identity(root: Path) -> dict[str, Any]:
+    """Collect assets for every adapter enabled by the deployment."""
+    raw_modules = os.getenv("ROBOT_ADAPTER_MODULES", "adapters.unitree_g1_29dof")
+    result: dict[str, Any] = {}
+    for module_name in (item.strip() for item in raw_modules.split(",")):
+        if not module_name:
+            continue
+        try:
+            module = __import__(module_name, fromlist=["create_adapter"])
+            factory = getattr(module, "create_adapter")
+            adapter = factory(repository_root=root)
+            robot_id = str(adapter.get_spec().robot_id)
+            identity = getattr(adapter, "asset_identity", None)
+            result[robot_id] = identity() if callable(identity) else {}
+        except Exception as exc:
+            result[module_name] = {"status": "unavailable", "error": str(exc)}
+    return result
+
+
+def collect(root: Path, *, profile: str | None = None) -> dict[str, Any]:
+    explicit_profile = profile or os.getenv("RUNTIME_PROFILE", "").strip().lower() or None
+    if explicit_profile:
+        runtime_profile = explicit_profile
+        runtime_names(runtime_profile)
+    else:
+        # This command is an acceptance tool.  With no process role/backend
+        # supplied, retain the historical strict GPU inventory behaviour.
+        has_process_context = bool(os.getenv("PLATFORM_ROLE", "").strip() or os.getenv("P3_BACKEND", "").strip())
+        runtime_profile = "gpu" if not has_process_context else infer_profile(
+            platform_role=os.getenv("PLATFORM_ROLE", "api").strip().lower(),
+            p3_backend=os.getenv("P3_BACKEND", "fake_smoke").strip().lower(),
+        )
     registration_file = root / ".runtime" / "runtime-registrations.json"
     try:
         value = json.loads(registration_file.read_text(encoding="utf-8")) if registration_file.is_file() else {}
@@ -147,10 +185,12 @@ def collect(root: Path) -> dict[str, Any]:
         "collected_at": datetime.now(timezone.utc).isoformat(),
         "host": {"hostname": socket.gethostname(), "platform": platform.platform(), "python": sys.version.split()[0]},
         "repository": {"root": str(root), "git_sha": _git_revision(root)},
+        "runtime_profile": runtime_profile,
         "external": external,
         "packages": packages,
         "cuda": {"nvidia_smi": gpus, "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES")},
         "assets": _asset_identity(root),
+        "robot_assets": _robot_asset_identity(root),
     }
 
 
@@ -158,16 +198,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="repository root")
     parser.add_argument("--output", type=Path, default=None, help="JSON destination; defaults to .runtime/runtime-manifest.json")
+    parser.add_argument("--profile", choices=tuple(RUNTIME_PROFILES), default=None, help="runtime requirement profile; defaults to RUNTIME_PROFILE or the process role/backend")
     parser.add_argument("--strict", action="store_true", help="fail when configured external paths are missing")
     args = parser.parse_args()
     root = args.root.resolve()
-    manifest = collect(root)
+    manifest = collect(root, profile=args.profile)
     output = (args.output or root / ".runtime" / "runtime-manifest.json").resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"output": str(output), "repository_sha": manifest["repository"]["git_sha"], "assets": manifest["assets"]}, ensure_ascii=False))
     if args.strict:
-        missing = [name for name, item in manifest["external"].items() if item.get("status") == "not_configured" or item.get("exists") is False]
+        required_names = set(runtime_names(str(manifest["runtime_profile"])))
+        missing = [name for name, item in manifest["external"].items() if name in required_names and (item.get("status") == "not_configured" or item.get("exists") is False)]
         missing.extend(name for name, item in manifest["assets"].items() if item.get("status") == "missing")
         if missing:
             print("Missing runtime identities: " + ", ".join(sorted(missing)), file=sys.stderr)

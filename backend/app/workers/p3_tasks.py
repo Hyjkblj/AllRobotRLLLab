@@ -10,17 +10,52 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from backend.app.application.training_service import TrainingService
+from backend.app.application.training_service import TrainingService, TrainingServiceError
 from backend.app.application.motion_pipeline_service import MotionPipelineService
 from backend.app.config.settings import settings
 from backend.app.domain.contracts import Sim2SimThresholds, TrainingConfig
 from backend.app.domain.state_machine import RunStatus
+from backend.app.runtime.process import terminate_run_process
 
 
 @dataclass
 class P3TaskExecutor:
     training_service: TrainingService
     motion_pipeline_service: MotionPipelineService | None = None
+
+    def _require_deployed_backend(self, *, operation: str, run_id: str, payload: dict[str, Any]) -> None:
+        """Fail closed using the provider/adapter selected for this Run."""
+
+        if not settings.is_deployed:
+            return
+        if self.training_service is None:
+            raise RuntimeError(
+                f"real P3 backend '{settings.p3_backend}' is not registered in this platform image; "
+                "refusing to run CPU smoke in a deployed environment"
+            )
+        if operation in {"train", "export"}:
+            config = None
+            if operation == "train" and payload.get("config") is not None:
+                config = TrainingConfig.model_validate(payload["config"])
+            try:
+                provider = self.training_service.training_provider_for_run(run_id=run_id, config=config)
+            except TrainingServiceError as exc:
+                raise RuntimeError(f"{exc.code}: {exc.message}") from exc
+            if provider is None:
+                raise RuntimeError(
+                    f"real P3 backend '{settings.p3_backend}' has no provider for this robot/task; "
+                    "refusing to run CPU smoke in a deployed environment"
+                )
+            return
+        if operation == "sim2sim":
+            with self.training_service.run_service.uow:
+                run = self.training_service.run_service.uow.runs.get(run_id)
+            robot_id = str((run.manifest.robot or {}).get("robot_id", "")).strip() if run else ""
+            if not robot_id or not self.training_service.has_sim2sim_adapter_for_robot(robot_id):
+                raise RuntimeError(
+                    f"real P3 backend '{settings.p3_backend}' has no sim2sim adapter for {robot_id or 'this run'}; "
+                    "refusing to run CPU smoke in a deployed environment"
+                )
 
     def execute(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = str(payload.get("operation", "")).strip().lower()
@@ -35,19 +70,19 @@ class P3TaskExecutor:
                 raise RuntimeError("motion pipeline service is not configured")
             record = self.motion_pipeline_service.process(str(payload["pipeline_id"]))
             return {"operation": operation, "pipeline_id": record.pipeline_id, "status": record.status, "output_asset_version_id": record.output_asset_version_id, "error_code": record.error_code}
-        if operation == "retry":
-            config_payload = payload.get("config")
-            if config_payload:
-                config = TrainingConfig.model_validate(config_payload)
-                result = self.training_service.train(run_id=run_id, config=config, worker_id=str(payload.get("worker_id", "local-worker")))
-                return {"operation": operation, "run_id": run_id, "status": "SUCCEEDED", "checkpoint_id": result.checkpoint.checkpoint_id}
-            return {"operation": operation, "run_id": run_id, "status": "ACKNOWLEDGED", "message": "no prior training config was available"}
         if operation in {"run_validate", "asset_uploading", "cancelled"}:
-            return {"operation": operation, "run_id": str(payload.get("run_id", "")), "status": "ACKNOWLEDGED"}
+            terminated = False
+            if operation == "cancelled" and run_id:
+                terminated = terminate_run_process(run_id, settings.runtime_root)
+            return {"operation": operation, "run_id": str(payload.get("run_id", "")), "status": "ACKNOWLEDGED", "process_terminated": terminated}
         if not run_id:
             raise ValueError("run_id is required")
-        if settings.is_deployed and (self.training_service is None or getattr(self.training_service, "training_runner", None) is None):
-            raise RuntimeError(f"real P3 backend '{settings.p3_backend}' is not registered in this platform image; refusing to run CPU smoke in a deployed environment")
+        # There is no Run repository to inspect when the worker was built
+        # without a TrainingService. Preserve the explicit deployed fail-fast
+        # error instead of leaking an AttributeError from the compatibility
+        # path below.
+        if settings.is_deployed and self.training_service is None:
+            self._require_deployed_backend(operation=operation, run_id=run_id, payload=payload)
         with self.training_service.run_service.uow:
             run = self.training_service.run_service.uow.runs.get(run_id)
             state = self.training_service.run_service.uow.p3_states.get(run_id)
@@ -57,6 +92,15 @@ class P3TaskExecutor:
             # A queued message can outlive a user cancellation.  Acknowledge
             # it without starting a simulator or creating new artifacts.
             return {"operation": operation, "run_id": run_id, "status": "CANCELLED", "cancelled": True}
+        guarded_operation = "train" if operation == "retry" else operation
+        self._require_deployed_backend(operation=guarded_operation, run_id=run_id, payload=payload)
+        if operation == "retry":
+            config_payload = payload.get("config")
+            if config_payload:
+                config = TrainingConfig.model_validate(config_payload)
+                result = self.training_service.train(run_id=run_id, config=config, worker_id=str(payload.get("worker_id", "local-worker")))
+                return {"operation": operation, "run_id": run_id, "status": "SUCCEEDED", "checkpoint_id": result.checkpoint.checkpoint_id}
+            return {"operation": operation, "run_id": run_id, "status": "ACKNOWLEDGED", "message": "no prior training config was available"}
         if operation == "train":
             if state is not None and state.checkpoint is not None and run.status in {RunStatus.TRAINING_SUCCEEDED, RunStatus.EXPORTING, RunStatus.EXPORTED, RunStatus.SIM2SIM_QUEUED, RunStatus.SIM2SIM_RUNNING, RunStatus.SIM2SIM_PASSED, RunStatus.READY_TO_DOWNLOAD}:
                 return {"operation": operation, "run_id": run_id, "status": "SUCCEEDED", "checkpoint_id": state.checkpoint.checkpoint_id, "replayed": True}
@@ -99,6 +143,22 @@ def register_p3_tasks(celery_app, executor: P3TaskExecutor) -> None:
     @celery_app.task(name="allrobotrl.assets.validate")
     def asset_validate(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
         return executor.execute({**payload, "operation": "asset_validate"})
+
+    @celery_app.task(name="allrobotrl.assets.uploading")
+    def asset_uploading(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "asset_uploading"})
+
+    @celery_app.task(name="allrobotrl.runs.created")
+    def run_created(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "run_validate"})
+
+    @celery_app.task(name="allrobotrl.runs.retry")
+    def run_retry(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "retry"})
+
+    @celery_app.task(name="allrobotrl.runs.cancelled")
+    def run_cancelled(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "cancelled"})
 
 
 __all__ = ["P3TaskExecutor", "register_p3_tasks"]

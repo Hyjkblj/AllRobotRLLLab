@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 import json
 import hmac
+import asyncio
 import tempfile
 import time
 from pathlib import Path
@@ -15,15 +16,16 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from adapters.unitree_g1_29dof import UnitreeG1Adapter
 from backend.app.adapters.motion import MotionDetectionError, MotionSourceRegistry
 from backend.app.application.motion_editor import MotionArrays, MotionEditVersionStore, MotionEditor
 from backend.app.application.motion_pipeline_service import MotionPipelineError, MotionPipelineService, MotionPipelineStore
 from backend.app.application.manifest_service import load_runtime_versions
+from backend.app.application.robot_catalog import RobotRegistryError
 from backend.app.application.asset_service import AssetService
 from backend.app.application.artifact_service import ArtifactService
 from backend.app.application.p3_dispatcher import P3DispatchError, P3DispatchService
-from backend.app.application.reward_catalog import RewardConfigVersionStore, default_reward_catalog, validate_reward_config
+from backend.app.application.reward_catalog import RewardConfigVersionStore, RewardRegistry
+from backend.app.application.platform_assembly import build_platform_assembly
 from backend.app.application.run_service import RunService, RunServiceError, utc_now
 from backend.app.application.training_validator import validate_training_config
 from backend.app.application.training_service import TrainingService, TrainingServiceError
@@ -37,15 +39,20 @@ from backend.app.infrastructure.postgres import PostgresDatabase
 from backend.app.infrastructure.postgres_uow import PostgresUnitOfWork
 from backend.app.infrastructure.preflight import check_minio, check_redis
 from backend.app.infrastructure.queue import CeleryTaskDispatcher, InMemoryTaskDispatcher
-from backend.app.runtime.factory import build_runtime_adapters
+from backend.app.runtime.process import terminate_run_process
 
 
 router = APIRouter()
-g1_adapter = UnitreeG1Adapter(repository_root=settings.repository_root)
+assembly = build_platform_assembly(settings, workspace=settings.runtime_root / "external")
+robot_registry = assembly.robot_registry
+g1_adapter = assembly.default_adapter  # compatibility alias for existing integrations
+task_registry = assembly.task_registry
 motion_registry = MotionSourceRegistry()
-motion_edit_store = MotionEditVersionStore()
-reward_config_store = RewardConfigVersionStore()
-motion_editor = MotionEditor(g1_adapter.get_spec(), ik_solver=g1_adapter.create_ik_solver())
+motion_edit_store = MotionEditVersionStore(storage_path=settings.runtime_root / "motion_edits.json")
+reward_registry = RewardRegistry()
+reward_config_store = RewardConfigVersionStore(reward_registry, storage_path=settings.runtime_root / "reward_configs.json")
+motion_editors = assembly.motion_editors
+motion_editor = motion_editors[g1_adapter.name]
 if settings.database_url:
     uow = PostgresUnitOfWork(settings.database_url)
 elif settings.storage_mode == "local_file":
@@ -56,10 +63,14 @@ run_service = RunService(uow)
 object_store = build_object_store(settings)
 asset_service = AssetService(uow, object_store)
 artifact_service = ArtifactService(uow, object_store)
-runtime_adapters = build_runtime_adapters(settings, workspace=settings.runtime_root / "external")
-training_runner = runtime_adapters["isaac"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab"} else None
-sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "unitree_mujoco"} else None
-training_service = TrainingService(run_service=run_service, robot_adapter=g1_adapter, workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter)
+runtime_adapters = assembly.runtime_adapters
+training_runner = runtime_adapters["providers"].get(settings.p3_backend) if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_rl_lab"} else None
+if settings.p3_backend == "isaac_lab":
+    training_runner = runtime_adapters["providers"].get("native_isaac_lab")
+sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_rl_lab", "unitree_mujoco"} else None
+training_providers = runtime_adapters["providers"] if settings.p3_backend != "fake_smoke" else {}
+sim2sim_adapters = runtime_adapters["sim2sim_adapters"] if settings.p3_backend != "fake_smoke" else {}
+training_service = TrainingService(run_service=run_service, robot_adapter=g1_adapter, robot_registry=robot_registry, task_registry=task_registry, training_providers=training_providers, sim2sim_adapters=sim2sim_adapters, training_provider_registry=runtime_adapters.get("training_provider_registry"), sim2sim_registry=runtime_adapters.get("sim2sim_registry"), workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter, reward_config_store=reward_config_store)
 if settings.execution_mode == "async" and settings.redis_url:
     p3_task_dispatcher = CeleryTaskDispatcher(settings.redis_url)
 elif settings.storage_mode == "local_file":
@@ -81,7 +92,26 @@ motion_pipeline_service = MotionPipelineService(
     kinematics_compiler=runtime_adapters["compiler"],
     gvhmr_runner=runtime_adapters["gvhmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
     gmr_runner=runtime_adapters["gmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
+    robot_registry=robot_registry,
+    motion_editors=motion_editors,
+    kinematics_compilers=runtime_adapters.get("kinematics_compilers", {}),
 )
+
+
+def _authorize_motion_source(request: Request, source_motion_version_id: str) -> None:
+    """Authorize access to an edit's source asset when it is durable."""
+
+    with uow:
+        version = uow.assets.version(source_motion_version_id)
+        asset = uow.assets.get(version.asset_id) if version is not None else None
+    if version is None or asset is None:
+        if settings.is_deployed:
+            raise _error(request, "ASSET_VERSION_NOT_FOUND", f"source motion version not found: {source_motion_version_id}", status_code=404)
+        return
+    try:
+        run_service.get_project(project_id=asset.project_id, actor=_actor(request))
+    except RunServiceError as exc:
+        raise _service_error(request, exc) from exc
 
 
 class MotionDetectRequest(BaseModel):
@@ -89,6 +119,7 @@ class MotionDetectRequest(BaseModel):
 
     path: str | None = Field(default=None, min_length=1)
     asset_version_id: str | None = None
+    robot_id: str | None = None
 
 
 class MotionProcessRequest(BaseModel):
@@ -223,14 +254,67 @@ def _error(request: Request, code: str, message: str, *, status_code: int = 400,
     return HTTPException(status_code=status_code, detail={"error": {"code": code, "message": message, "stage": "api", "details": details or {}, "retryable": False}, "request_id": _request_id(request)})
 
 
+def _resolve_reward_scope(request: Request, *, robot_id: str | None, task_id: str | None) -> tuple[str, str]:
+    """Resolve and cross-check the robot/task pair used by reward validation."""
+    if robot_id is not None:
+        try:
+            robot_registry.get(robot_id)
+        except RobotRegistryError as exc:
+            raise _error(request, "ROBOT_NOT_FOUND", str(exc), status_code=404) from exc
+    if task_id is not None:
+        try:
+            task = task_registry.get(task_id)
+        except Exception as exc:
+            raise _error(request, "TASK_NOT_FOUND", f"unknown task: {task_id}", status_code=404) from exc
+        if robot_id is not None and task.robot_id != robot_id:
+            raise _error(request, "TASK_ROBOT_MISMATCH", f"task {task_id} is registered for robot {task.robot_id}", status_code=422)
+        robot_id = task.robot_id
+    if robot_id is None:
+        available = task_registry.list()
+        if len(available) != 1:
+            raise _error(request, "REWARD_SCOPE_REQUIRED", "robot_id and task_id are required when multiple tasks are registered", status_code=422)
+        robot_id = available[0].robot_id
+    if task_id is None:
+        candidates = task_registry.for_robot(robot_id)
+        if len(candidates) != 1:
+            raise _error(request, "REWARD_SCOPE_REQUIRED", f"task_id is required for robot {robot_id}", status_code=422)
+        task_id = candidates[0].task_id
+    return robot_id, task_id
+
+
 def _service_error(request: Request, error: RunServiceError) -> HTTPException:
     return _error(request, error.code, error.message, status_code=error.status_code)
 
 
-def _require_real_backend(request: Request, operation: str = "train") -> None:
+def _require_real_backend(request: Request, operation: str = "train", run_id: str | None = None, config: TrainingConfig | None = None) -> None:
     if not settings.is_deployed:
         return
-    configured = training_service.training_runner is not None if operation in {"train", "export"} else training_service.sim2sim_adapter is not None
+    if operation in {"train", "export"}:
+        if operation == "export" and run_id:
+            try:
+                current_run, _ = run_service.get_run(run_id=run_id, actor=_actor(request))
+            except RunServiceError as exc:
+                raise _service_error(request, exc) from exc
+            # Preserve the domain status error (for example, exporting a
+            # CREATED run) before checking an external provider.
+            if current_run.status != RunStatus.TRAINING_SUCCEEDED:
+                return
+        try:
+            provider = training_service.training_provider_for_run(run_id=run_id or "", config=config, actor=_actor(request))
+        except TrainingServiceError as exc:
+            raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
+        configured = provider is not None
+    elif operation == "sim2sim" and run_id:
+        try:
+            run, _ = run_service.get_run(run_id=run_id, actor=_actor(request))
+        except RunServiceError as exc:
+            raise _service_error(request, exc) from exc
+        robot_id = str((run.manifest.robot or {}).get("robot_id", "")).strip()
+        if run.status != RunStatus.EXPORTED:
+            return
+        configured = bool(robot_id) and training_service.has_sim2sim_adapter_for_robot(robot_id)
+    else:
+        configured = False
     if not configured:
         raise _error(request, "REAL_BACKEND_NOT_CONFIGURED", f"P3 backend '{settings.p3_backend}' has no registered {operation} runner; deployed API cannot execute CPU smoke", status_code=503)
 
@@ -269,10 +353,14 @@ def infrastructure_health(request: Request) -> dict:
 
 
 @router.get("/runtime/doctor")
-def runtime_doctor(request: Request) -> dict:
+def runtime_doctor(request: Request, profile: str | None = Query(default=None)) -> dict:
     """Expose external runtime registration state for server acceptance checks."""
-    report = runtime_adapters["registry"].doctor(required_only=False)
-    report.update({"request_id": _request_id(request), "p3_backend": settings.p3_backend, "execution_mode": settings.execution_mode})
+    selected_profile = profile or settings.runtime_profile
+    try:
+        report = runtime_adapters["registry"].doctor(required_only=False, profile=selected_profile)
+    except ValueError as exc:
+        raise _error(request, "RUNTIME_PROFILE_INVALID", str(exc), status_code=422) from exc
+    report.update({"request_id": _request_id(request), "p3_backend": settings.p3_backend, "execution_mode": settings.execution_mode, "runtime_profile": selected_profile})
     return report
 
 
@@ -446,35 +534,48 @@ def get_artifact(artifact_id: str, request: Request) -> dict:
 
 @router.get("/robots")
 def robots(request: Request) -> dict:
-    spec = g1_adapter.get_spec()
-    return {"request_id": _request_id(request), "items": [spec.model_dump(mode="json")], "resource_version": spec.adapter_version}
+    specs = [spec.model_dump(mode="json") for spec in robot_registry.specs()]
+    return {"request_id": _request_id(request), "items": specs, "resource_version": ":".join(spec["adapter_version"] for spec in specs)}
 
 
 @router.get("/robots/{robot_id}")
 def robot(robot_id: str, request: Request) -> dict:
-    if robot_id != g1_adapter.name:
-        raise _error(request, "ROBOT_NOT_FOUND", f"unknown robot adapter: {robot_id}", status_code=404)
-    spec = g1_adapter.get_spec()
+    try:
+        spec = robot_registry.get(robot_id).get_spec()
+    except RobotRegistryError as exc:
+        raise _error(request, "ROBOT_NOT_FOUND", str(exc), status_code=404) from exc
     return {"request_id": _request_id(request), "item": spec.model_dump(mode="json"), "resource_version": spec.adapter_version}
 
 
 @router.get("/robots/{robot_id}/self-check")
 def robot_self_check(robot_id: str, request: Request) -> dict:
-    if robot_id != g1_adapter.name:
+    try:
+        adapter = robot_registry.get(robot_id)
+    except RobotRegistryError as exc:
+        raise _error(request, "ROBOT_NOT_FOUND", str(exc), status_code=404) from exc
+    result = adapter.self_check()
+    return {"request_id": _request_id(request), "result": result.model_dump(mode="json"), "resource_version": adapter.get_spec().adapter_version}
+
+
+@router.get("/tasks")
+def tasks(request: Request, robot_id: str | None = Query(default=None)) -> dict:
+    if robot_id is not None and not robot_registry.contains(robot_id):
         raise _error(request, "ROBOT_NOT_FOUND", f"unknown robot adapter: {robot_id}", status_code=404)
-    result = g1_adapter.self_check()
-    return {"request_id": _request_id(request), "result": result.model_dump(mode="json"), "resource_version": g1_adapter.get_spec().adapter_version}
+    items = [task.__dict__ for task in task_registry.list(robot_id=robot_id)]
+    return {"request_id": _request_id(request), "items": items, "resource_version": "task-registry.v1"}
 
 
 @router.get("/reward-templates")
-def reward_templates(request: Request) -> dict:
-    items = [term.model_dump(mode="json") for term in default_reward_catalog()]
+def reward_templates(request: Request, robot_id: str | None = Query(default=None), task_id: str | None = Query(default=None)) -> dict:
+    if robot_id is not None or task_id is not None:
+        robot_id, task_id = _resolve_reward_scope(request, robot_id=robot_id, task_id=task_id)
+    items = [term.model_dump(mode="json") for term in reward_registry.list(robot_id=robot_id, task_id=task_id)]
     return {"request_id": _request_id(request), "items": items, "resource_version": "reward-registry.v1"}
 
 
 @router.get("/training-config/schema")
 def training_config_schema(request: Request) -> dict:
-    return {"request_id": _request_id(request), "schema": TrainingConfig.model_json_schema(), "resource_version": "training_config.v1"}
+    return {"request_id": _request_id(request), "schema": TrainingConfig.model_json_schema(), "tasks": [task.__dict__ for task in task_registry.list()], "resource_version": "training_config.v1"}
 
 
 @router.post("/motions/detect")
@@ -509,7 +610,12 @@ def detect_motion(payload: MotionDetectRequest, request: Request) -> dict:
     try:
         # Trusted pickle parsing is an internal worker capability, never a
         # user-controlled API flag.
-        descriptor = motion_registry.detect(path, asset_version_id=payload.asset_version_id, trusted_pickle=False)
+        try:
+            target_adapter = robot_registry.get(payload.robot_id)
+        except RobotRegistryError as exc:
+            raise _error(request, "ROBOT_NOT_FOUND", str(exc), status_code=404) from exc
+        target_spec = target_adapter.get_spec()
+        descriptor = motion_registry.detect(path, asset_version_id=payload.asset_version_id, trusted_pickle=False, target_dof=target_spec.dof, robot_id=target_adapter.name)
     except MotionDetectionError as exc:
         raise _error(request, exc.code, exc.message, details=exc.details) from exc
     return {"request_id": _request_id(request), "descriptor": descriptor.model_dump(mode="json"), "resource_version": descriptor.detector_version}
@@ -552,8 +658,9 @@ def get_motion_pipeline_by_id(pipeline_id: str, request: Request) -> dict:
 
 @router.post("/motion-edits")
 def create_motion_edit(payload: MotionEditConfig, request: Request, parent_version_id: str | None = Query(default=None)) -> dict:
-    if payload.robot_id != g1_adapter.name:
+    if not robot_registry.contains(payload.robot_id):
         raise _error(request, "ROBOT_NOT_FOUND", f"unknown robot adapter: {payload.robot_id}", status_code=404)
+    _authorize_motion_source(request, payload.source_motion_version_id)
     try:
         record = motion_edit_store.create(payload, parent_version_id=parent_version_id)
     except ValueError as exc:
@@ -566,11 +673,13 @@ def get_motion_edit(version_id: str, request: Request) -> dict:
     record = motion_edit_store.get(version_id)
     if record is None:
         raise _error(request, "MOTION_EDIT_NOT_FOUND", f"motion edit version not found: {version_id}", status_code=404)
+    _authorize_motion_source(request, record.source_motion_version_id)
     return {"request_id": _request_id(request), "item": record.model_dump(mode="json"), "resource_version": record.config_sha256}
 
 
 @router.get("/motions/{source_motion_version_id}/edits")
 def list_motion_edits(source_motion_version_id: str, request: Request) -> dict:
+    _authorize_motion_source(request, source_motion_version_id)
     records = motion_edit_store.list_for_source(source_motion_version_id)
     return {"request_id": _request_id(request), "items": [record.model_dump(mode="json") for record in records], "resource_version": str(len(records))}
 
@@ -580,6 +689,7 @@ def compile_motion_edit(version_id: str, payload: MotionCompileRequest, request:
     record = motion_edit_store.get(version_id)
     if record is None:
         raise _error(request, "MOTION_EDIT_NOT_FOUND", f"motion edit version not found: {version_id}", status_code=404)
+    _authorize_motion_source(request, record.source_motion_version_id)
     arrays = MotionArrays(
         fps=payload.fps,
         joint_pos=np.asarray(payload.joint_pos, dtype=np.float64),
@@ -589,7 +699,13 @@ def compile_motion_edit(version_id: str, payload: MotionCompileRequest, request:
         quat_convention=payload.quat_convention,
         coord_frame=payload.coord_frame,
     )
-    result = motion_editor.apply(arrays, record.config)
+    try:
+        editor = motion_editors.get(record.config.robot_id)
+        if editor is None:
+            editor = MotionEditor(robot_registry.get(record.config.robot_id).get_spec())
+    except RobotRegistryError as exc:
+        raise _error(request, "ROBOT_NOT_FOUND", str(exc), status_code=404) from exc
+    result = editor.apply(arrays, record.config)
     response = {
         "request_id": _request_id(request),
         "result": result.validation.model_dump(mode="json"),
@@ -603,6 +719,11 @@ def compile_motion_edit(version_id: str, payload: MotionCompileRequest, request:
 
 @router.post("/motion-edits/{version_id}/restore/{target_version_id}")
 def restore_motion_edit(version_id: str, target_version_id: str, request: Request) -> dict:
+    current = motion_edit_store.get(version_id)
+    target = motion_edit_store.get(target_version_id)
+    if current is None or target is None:
+        raise _error(request, "MOTION_EDIT_NOT_FOUND", "motion edit version to restore was not found", status_code=404)
+    _authorize_motion_source(request, current.source_motion_version_id)
     try:
         record = motion_edit_store.restore(version_id, target_version_id)
     except ValueError as exc:
@@ -611,15 +732,17 @@ def restore_motion_edit(version_id: str, target_version_id: str, request: Reques
 
 
 @router.post("/reward-configs/validate")
-def validate_reward(payload: RewardConfig, request: Request) -> dict:
-    result = validate_reward_config(payload)
+def validate_reward(payload: RewardConfig, request: Request, robot_id: str | None = Query(default=None), task_id: str | None = Query(default=None)) -> dict:
+    robot_id, task_id = _resolve_reward_scope(request, robot_id=robot_id, task_id=task_id)
+    result = reward_registry.validate(payload, robot_id=robot_id, task_id=task_id)
     return {"request_id": _request_id(request), "result": result.model_dump(mode="json"), "resource_version": result.processor_version}
 
 
 @router.post("/reward-configs")
-def create_reward_config(payload: RewardConfig, request: Request, parent_version_id: str | None = Query(default=None)) -> dict:
+def create_reward_config(payload: RewardConfig, request: Request, parent_version_id: str | None = Query(default=None), robot_id: str | None = Query(default=None), task_id: str | None = Query(default=None)) -> dict:
+    robot_id, task_id = _resolve_reward_scope(request, robot_id=robot_id, task_id=task_id)
     try:
-        record = reward_config_store.create(payload, parent_version_id=parent_version_id)
+        record = reward_config_store.create(payload, parent_version_id=parent_version_id, robot_id=robot_id, task_id=task_id, registry=reward_registry)
     except ValueError as exc:
         raise _error(request, "REWARD_CONFIG_INVALID", str(exc)) from exc
     return {"request_id": _request_id(request), "item": record.model_dump(mode="json"), "resource_version": record.config_sha256}
@@ -640,8 +763,18 @@ def list_reward_versions(template: str, request: Request) -> dict:
 
 
 @router.post("/training-config/validate")
-def validate_training(payload: TrainingConfig, request: Request) -> dict:
-    result = validate_training_config(payload, g1_adapter.get_spec())
+def validate_training(payload: TrainingConfig, request: Request, robot_id: str | None = Query(default=None)) -> dict:
+    try:
+        adapter = robot_registry.get(robot_id)
+    except RobotRegistryError as exc:
+        raise _error(request, "ROBOT_NOT_FOUND", str(exc), status_code=404) from exc
+    try:
+        task = task_registry.get(payload.task_id)
+    except Exception as exc:
+        raise _error(request, "TASK_NOT_FOUND", f"unknown task: {payload.task_id}", status_code=422) from exc
+    if task.robot_id != adapter.get_spec().robot_id:
+        raise _error(request, "TASK_ROBOT_MISMATCH", f"task {payload.task_id} is registered for robot {task.robot_id}", status_code=422)
+    result = validate_training_config(payload, adapter.get_spec(), task)
     return {"request_id": _request_id(request), "result": result.model_dump(mode="json"), "resource_version": result.processor_version}
 
 
@@ -689,18 +822,40 @@ def create_run(payload: RunCreateRequest, request: Request, idempotency_key: str
 
 
 @router.get("/runs/{run_id}/events")
-def run_events(run_id: str, request: Request, after_seq: int = Query(default=0, ge=0), attempt_id: str | None = Query(default=None), last_event_id: int | None = Header(default=None, alias="Last-Event-ID")) -> StreamingResponse:
+async def run_events(run_id: str, request: Request, after_seq: int = Query(default=0, ge=0), attempt_id: str | None = Query(default=None), last_event_id: int | None = Header(default=None, alias="Last-Event-ID"), follow: bool = Query(default=False)) -> StreamingResponse:
     cursor = last_event_id if last_event_id is not None else after_seq
     try:
         events = run_service.list_events(run_id=run_id, actor=_actor(request), after_seq=cursor, attempt_id=attempt_id)
     except RunServiceError as exc:
         raise _service_error(request, exc) from exc
 
-    def stream():
-        for event in events:
-            yield f"id: {event.seq}\nevent: {event.event_type}\ndata: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False, separators=(',', ':'))}\n\n"
+    start_cursor = cursor
 
-    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    async def stream():
+        cursor = start_cursor
+        last_heartbeat = time.monotonic()
+        while True:
+            current = events if cursor == start_cursor else run_service.list_events(run_id=run_id, actor=_actor(request), after_seq=cursor, attempt_id=attempt_id)
+            for event in current:
+                cursor = max(cursor, event.seq)
+                yield f"id: {event.seq}\nevent: {event.event_type}\ndata: {json.dumps(event.model_dump(mode='json'), ensure_ascii=False, separators=(',', ':'))}\n\n"
+            if not follow:
+                break
+            if await request.is_disconnected():
+                break
+            if time.monotonic() - last_heartbeat >= 15:
+                yield ": keep-alive\n\n"
+                last_heartbeat = time.monotonic()
+            try:
+                with run_service.uow:
+                    run = run_service.uow.runs.get(run_id)
+                if run is not None and run.status in {RunStatus.READY_TO_DOWNLOAD, RunStatus.FAILED, RunStatus.FAILED_NEEDS_REVIEW, RunStatus.CANCELLED}:
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 
 @router.get("/runs/{run_id}")
@@ -718,7 +873,12 @@ def cancel_run(run_id: str, request: Request) -> dict:
         run, attempt = run_service.cancel_run(run_id=run_id, actor=_actor(request))
     except RunServiceError as exc:
         raise _service_error(request, exc) from exc
-    return {"request_id": _request_id(request), "item": run.model_dump(mode="json"), "attempt": attempt.model_dump(mode="json"), "resource_version": run.updated_at}
+    # Stop an already running external GPU process immediately. The outbox
+    # cancellation task remains the durable retry path for workers that are
+    # temporarily unavailable, but the synchronous API should release the
+    # current process/VRAM without waiting for the dispatcher poll interval.
+    process_terminated = terminate_run_process(run_id, settings.runtime_root)
+    return {"request_id": _request_id(request), "item": run.model_dump(mode="json"), "attempt": attempt.model_dump(mode="json"), "process_terminated": process_terminated, "resource_version": run.updated_at}
 
 
 @router.post("/runs/{run_id}/retry")
@@ -732,7 +892,7 @@ def retry_run(run_id: str, request: Request) -> dict:
 
 @router.post("/runs/{run_id}/status")
 def update_run_status(run_id: str, payload: RunStatusRequest, request: Request) -> dict:
-    worker_id = _worker_id(request)
+    _worker_id(request)
     try:
         run = run_service.transition_run(run_id=run_id, target=payload.status, stage=payload.stage, message=payload.message)
         run, attempts = run_service.get_run(run_id=run_id, actor=Actor(user_id=run.created_by))
@@ -780,6 +940,7 @@ def append_run_event(run_id: str, payload: RunEventAppendRequest, request: Reque
 @router.post("/runs/{run_id}/train")
 def train_run(run_id: str, payload: TrainingConfig, request: Request) -> dict:
     execution_mode = _execution_mode(request)
+    _require_real_backend(request, "train", run_id, config=payload)
     if execution_mode == "async":
         # User-facing submission is authenticated by project membership. The
         # worker marker is reserved for internal status/artifact callbacks.
@@ -790,7 +951,6 @@ def train_run(run_id: str, payload: TrainingConfig, request: Request) -> dict:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
     worker_id = _worker_id(request)
-    _require_real_backend(request, "train")
     try:
         result = training_service.train(run_id=run_id, config=payload, worker_id=worker_id)
     except TrainingServiceError as exc:
@@ -801,6 +961,7 @@ def train_run(run_id: str, payload: TrainingConfig, request: Request) -> dict:
 @router.post("/runs/{run_id}/export")
 def export_run(run_id: str, request: Request) -> dict:
     execution_mode = _execution_mode(request)
+    _require_real_backend(request, "export", run_id)
     if execution_mode == "async":
         worker_id = f"api:{_actor(request).user_id}"
         try:
@@ -809,7 +970,6 @@ def export_run(run_id: str, request: Request) -> dict:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
     worker_id = _worker_id(request)
-    _require_real_backend(request, "export")
     try:
         bundle = training_service.export(run_id=run_id)
     except TrainingServiceError as exc:
@@ -820,6 +980,7 @@ def export_run(run_id: str, request: Request) -> dict:
 @router.post("/runs/{run_id}/sim2sim")
 def sim2sim_run(run_id: str, payload: Sim2SimRequest, request: Request) -> dict:
     execution_mode = _execution_mode(request)
+    _require_real_backend(request, "sim2sim", run_id)
     if execution_mode == "async":
         worker_id = f"api:{_actor(request).user_id}"
         try:
@@ -828,7 +989,6 @@ def sim2sim_run(run_id: str, payload: Sim2SimRequest, request: Request) -> dict:
             raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
         return JSONResponse(status_code=202, content={"request_id": _request_id(request), "submission": submission.model_dump(mode="json"), "resource_version": submission.idempotency_key})
     worker_id = _worker_id(request)
-    _require_real_backend(request, "sim2sim")
     try:
         report = training_service.sim2sim(run_id=run_id, seeds=tuple(payload.seeds), thresholds=payload.thresholds)
     except TrainingServiceError as exc:

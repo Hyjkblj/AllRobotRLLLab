@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 from backend.app.domain.contracts import RobotSpec, TrainingConfig, ValidationIssue, ValidationResult, ValidationSeverity
+from backend.app.application.task_catalog import TaskSpec
 
 
-def validate_training_config(config: TrainingConfig, robot: RobotSpec) -> ValidationResult:
+def validate_training_config(config: TrainingConfig, robot: RobotSpec, task: TaskSpec | None = None) -> ValidationResult:
     issues: list[ValidationIssue] = []
+    if task is not None:
+        if task.robot_id != robot.robot_id:
+            issues.append(ValidationIssue(code="TASK_ROBOT_MISMATCH", message="task is registered for another robot", severity=ValidationSeverity.BLOCKING_ERROR, field="task_id", expected=robot.robot_id, actual=task.robot_id))
+        if config.scene_id != task.scene_id:
+            issues.append(ValidationIssue(code="SCENE_NOT_REGISTERED", message="scene does not match the selected task", severity=ValidationSeverity.BLOCKING_ERROR, field="scene_id", expected=task.scene_id, actual=config.scene_id))
     if config.task_id not in robot.isaac_task_ids:
         issues.append(ValidationIssue(code="TASK_NOT_REGISTERED", message=f"task is not registered by the selected robot adapter: {config.task_id}", severity=ValidationSeverity.BLOCKING_ERROR, field="task_id", expected=robot.isaac_task_ids, actual=config.task_id))
-    if config.action.mode != "joint_position_delta":
-        issues.append(ValidationIssue(code="ACTION_MODE_UNSUPPORTED", message="G1 P1 only supports joint_position_delta", severity=ValidationSeverity.BLOCKING_ERROR, field="action.mode", expected="joint_position_delta", actual=config.action.mode))
+    supported_modes = robot.action_modes or ["joint_position_delta"]
+    if config.action.mode not in supported_modes:
+        issues.append(ValidationIssue(code="ACTION_MODE_UNSUPPORTED", message=f"action mode is not supported by {robot.robot_id}", severity=ValidationSeverity.BLOCKING_ERROR, field="action.mode", expected=supported_modes, actual=config.action.mode))
     if config.action.scale > robot.actuation.action_scale:
         issues.append(ValidationIssue(code="ACTION_SCALE_EXCEEDS_ADAPTER", message="action scale exceeds the adapter safety scale", severity=ValidationSeverity.BLOCKING_ERROR, field="action.scale", expected=robot.actuation.action_scale, actual=config.action.scale))
     expected_decimation = robot.actuation.policy_dt / robot.actuation.control_dt
@@ -31,4 +38,3 @@ def resume_is_compatible(previous: TrainingConfig, current: TrainingConfig) -> b
 
 
 __all__ = ["resume_is_compatible", "validate_training_config"]
-

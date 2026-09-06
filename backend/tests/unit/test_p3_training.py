@@ -1,10 +1,17 @@
 from pathlib import Path
+import hashlib
+import json
+import pytest
 
 from adapters.unitree_g1_29dof import UnitreeG1Adapter
 from backend.app.application.artifact_service import ArtifactService
+from backend.app.application.asset_service import AssetService
 from backend.app.application.policy_exporter import ExportResult, file_record, verify_checksums
-from backend.app.application.training_service import TrainingService
-from backend.app.domain.contracts import ExportMetadata, TrainingConfig
+from backend.app.application.training_service import TrainingService, TrainingServiceError
+from backend.app.application.policy_exporter import ExportError
+from backend.app.application.reward_catalog import RewardConfigVersionStore, default_reward_config
+from backend.app.runtime.contracts import ExternalRunResult
+from backend.app.domain.contracts import AssetKind, ExportMetadata, LicenseInfo, TrainingConfig
 from backend.app.domain.contracts import Actor
 from backend.app.application.run_service import RunService
 from backend.app.infrastructure.memory import InMemoryUnitOfWork
@@ -96,3 +103,69 @@ def test_p3_state_survives_training_service_recreation(tmp_path: Path) -> None:
     assert third.bundles[run.run_id].status == "READY_TO_DOWNLOAD"
     assert third.bundles[run.run_id].sim2sim_report is not None
     assert {artifact.kind for artifact in artifact_service.list_for_run(run_id=run.run_id, actor=actor)} == {"checkpoint", "policy_bundle", "sim2sim_report", "policy_bundle_final"}
+
+
+def test_training_rejects_motion_asset_from_another_project(tmp_path: Path) -> None:
+    uow = InMemoryUnitOfWork()
+    run_service = RunService(uow)
+    actor = Actor(user_id="alice")
+    project = run_service.create_project(name="run-project", actor=actor)
+    other = run_service.create_project(name="other-project", actor=actor)
+    run, _, _ = run_service.create_run(
+        actor=actor,
+        project_id=project.project_id,
+        robot={"robot_id": "unitree_g1_29dof"},
+        motion={"train_motion_sha256": "a" * 64},
+        reward_config_sha256="b" * 64,
+        training_config_sha256="c" * 64,
+    )
+    assets = AssetService(uow, LocalObjectStore(tmp_path / "objects"))
+    _asset, version, _session = assets.create_asset(
+        actor=actor,
+        project_id=other.project_id,
+        kind=AssetKind.MOTION,
+        display_name="TrainMotionNPZ",
+        original_filename="train_motion.npz",
+        license=LicenseInfo(status="declared"),
+    )
+    assets.mark_validated(asset_version_id=version.asset_version_id, valid=True, sha256="d" * 64, size_bytes=1)
+    adapter = UnitreeG1Adapter(repository_root=Path(__file__).resolve().parents[3])
+    service = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=tmp_path / "workspace")
+    with pytest.raises(TrainingServiceError) as raised:
+        service.prepare_training(run_id=run.run_id, config=TrainingConfig(motion_asset_version_id=version.asset_version_id))
+    assert raised.value.code == "TRAIN_MOTION_PROJECT_MISMATCH"
+
+
+def test_external_export_rejects_logs_without_policy(tmp_path: Path) -> None:
+    output_dir = tmp_path / "export"
+    output_dir.mkdir()
+    (output_dir / "log.txt").write_text("completed", encoding="utf-8")
+    manifest = output_dir / "manifest.json"
+    manifest.write_text(json.dumps({"outputs": [{"path": "log.txt", "sha256": hashlib.sha256(b"completed").hexdigest()}]}), encoding="utf-8")
+    execution = ExternalRunResult("export", ("runner",), 0, "", "", output_dir, {"log": output_dir / "log.txt"}, manifest)
+    service = object.__new__(TrainingService)
+    with pytest.raises(ExportError) as raised:
+        service._external_export_result(execution, output_dir=output_dir, input_dim=4, output_dim=2, action_scale=0.25)
+    assert raised.value.code == "ISAAC_EXPORT_POLICY_MISSING"
+
+
+def test_training_preparation_loads_manifest_reward_config_by_hash(tmp_path: Path) -> None:
+    uow = InMemoryUnitOfWork()
+    run_service = RunService(uow)
+    actor = Actor(user_id="reward-owner")
+    project = run_service.create_project(name="reward-project", actor=actor)
+    reward = default_reward_config(robot_id="unitree_g1_29dof", task_id="g1_mimic")
+    reward_store = RewardConfigVersionStore()
+    version = reward_store.create(reward, robot_id="unitree_g1_29dof", task_id="g1_mimic")
+    run, _, _ = run_service.create_run(
+        actor=actor,
+        project_id=project.project_id,
+        robot={"robot_id": "unitree_g1_29dof"},
+        motion={"train_motion_sha256": "a" * 64},
+        reward_config_sha256=version.config_sha256,
+        training_config_sha256="c" * 64,
+    )
+    adapter = UnitreeG1Adapter(repository_root=Path(__file__).resolve().parents[3])
+    service = TrainingService(run_service=run_service, robot_adapter=adapter, workspace=tmp_path / "workspace", reward_config_store=reward_store)
+    service.prepare_training(run_id=run.run_id, config=TrainingConfig(motion_asset_version_id="motion-1"))
+    assert service.reward_configs[run.run_id].model_dump(mode="json") == reward.model_dump(mode="json")

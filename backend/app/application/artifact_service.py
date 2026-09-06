@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import uuid
 
-from backend.app.domain.contracts import Actor, ArtifactRecord, ProjectRole
+from backend.app.domain.contracts import Actor, ArtifactRecord
 from backend.app.infrastructure.memory import RepositoryConflict
 from backend.app.infrastructure.object_store import validate_object_key
-from .run_service import RunServiceError, utc_now
+from .run_service import RunServiceError
 
 
 class ArtifactService:

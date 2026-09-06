@@ -38,8 +38,18 @@ class P3DispatchService:
             run, attempt = self.training_service.prepare_training(run_id=run_id, config=config, actor=actor)
         except (RunServiceError, TrainingServiceError) as exc:
             raise P3DispatchError(getattr(exc, "code", "TRAIN_SUBMISSION_INVALID"), str(exc), status_code=getattr(exc, "status_code", 400)) from exc
-        payload = {"run_id": run_id, "attempt_id": attempt.attempt_id, "config": config.model_dump(mode="json"), "worker_id": worker_id}
-        return self._enqueue(operation="train", queue="isaac-gpu", task="allrobotrl.p3.train", run_id=run_id, attempt_id=attempt.attempt_id, payload=payload)
+        effective_config = self.training_service.configs.get(run_id, config)
+        payload = {"run_id": run_id, "attempt_id": attempt.attempt_id, "config": effective_config.model_dump(mode="json"), "worker_id": worker_id}
+        try:
+            return self._enqueue(operation="train", queue="isaac-gpu", task="allrobotrl.p3.train", run_id=run_id, attempt_id=attempt.attempt_id, payload=payload)
+        except P3DispatchError:
+            # Preparation is committed before transport submission. Make a
+            # queue outage retryable instead of stranding the run forever.
+            try:
+                self.run_service.transition_run(run_id=run_id, target=RunStatus.FAILED, stage="queue", message="Training task submission failed")
+            except RunServiceError:
+                pass
+            raise
 
     def submit_export(self, *, run_id: str, actor: Actor, worker_id: str) -> TaskSubmission:
         run, attempts = self._get_run(run_id=run_id, actor=actor)

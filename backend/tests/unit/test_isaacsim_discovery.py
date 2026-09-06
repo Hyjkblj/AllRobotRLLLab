@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from scripts.check_external_runtime import discover_isaacsim_path
 

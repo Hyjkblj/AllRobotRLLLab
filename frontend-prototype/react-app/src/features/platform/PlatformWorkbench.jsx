@@ -140,13 +140,14 @@ function SectionHeader({ eyebrow, title, description, action }) {
 
 function Overview({ health, infrastructure, projects, robots, robotCheck, runs, onNavigate, onRefresh }) {
   const robot = robots[0];
+  const robotLabel = robot?.model || robot?.robot_id || "机器人适配器";
   const latestRun = runs[0];
   return <>
     <SectionHeader eyebrow="PLATFORM CONTROL" title="训练工作台" description="从项目资源到可追溯 Run 的统一入口。" action={<button className="icon-button" title="刷新平台状态" onClick={onRefresh}><RefreshCw size={16} /></button>} />
     <div className="platform-stat-grid">
       <div className="stat-card"><div className="stat-icon blue"><ServerCog size={18} /></div><span>API 服务</span><strong>{health?.status === "ok" ? "在线" : "离线"}</strong><small>{health?.storage_mode || "未连接"}</small></div>
       <div className="stat-card"><div className="stat-icon green"><Database size={18} /></div><span>存储模式</span><strong>{health?.storage_mode === "local_file" ? "Local File" : health?.storage_mode || "—"}</strong><small>{health?.runtime_root || "等待服务"}</small></div>
-      <div className="stat-card"><div className="stat-icon silver"><Box size={18} /></div><span>机器人适配器</span><strong>{robot?.model || robot?.robot_id || "—"}</strong><small>{robot ? `${robot.dof || robot.joints?.length || 29} DoF` : "未加载"}</small></div>
+      <div className="stat-card"><div className="stat-icon silver"><Box size={18} /></div><span>机器人适配器</span><strong>{robot?.model || robot?.robot_id || "—"}</strong><small>{robot ? `${robot.dof || robot.joints?.length || "—"} DoF` : "未加载"}</small></div>
       <div className="stat-card"><div className="stat-icon amber"><Activity size={18} /></div><span>当前 Run</span><strong>{latestRun ? RUN_STATUS_LABELS[latestRun.status] || latestRun.status : "—"}</strong><small>{latestRun?.run_id ? latestRun.run_id.slice(0, 8) : "尚未创建"}</small></div>
     </div>
     <div className="platform-columns">
@@ -154,7 +155,7 @@ function Overview({ health, infrastructure, projects, robots, robotCheck, runs, 
         {projects.length ? <div className="project-list">{projects.slice(0, 6).map((project) => <button className="project-row" key={project.project_id} onClick={() => onNavigate("assets", project.project_id)}><span className="project-mark">{project.name?.slice(0, 1) || "P"}</span><span><strong>{project.name}</strong><small>{project.project_id}</small></span><ArrowRight size={15} /></button>)}</div> : <div className="empty-state">还没有项目</div>}
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="RUNTIME" title="运行时检查" />
-        <div className="check-list"><div><span><ShieldCheck size={15} /> G1 适配器</span><Badge tone={robotCheck?.valid ? "green" : robot ? "amber" : "red"}>{robotCheck?.valid ? "READY" : robot ? "CHECK" : "MISSING"}</Badge></div><div><span><Cpu size={15} /> GPU / worker</span><Badge tone={infrastructure?.status === "ok" ? "green" : "silver"}>{infrastructure?.status === "ok" ? "READY" : "PENDING"}</Badge></div><div><span><FileCheck2 size={15} /> 契约版本</span><Badge tone="green">v1</Badge></div></div>{robotCheck?.issues?.length > 0 && <div className="check-warning"><TriangleAlert size={14} /> {robotCheck.issues[0].message}</div>}
+        <div className="check-list"><div><span><ShieldCheck size={15} /> {robotLabel} 适配器</span><Badge tone={robotCheck?.valid ? "green" : robot ? "amber" : "red"}>{robotCheck?.valid ? "READY" : robot ? "CHECK" : "MISSING"}</Badge></div><div><span><Cpu size={15} /> GPU / worker</span><Badge tone={infrastructure?.status === "ok" ? "green" : "silver"}>{infrastructure?.status === "ok" ? "READY" : "PENDING"}</Badge></div><div><span><FileCheck2 size={15} /> 契约版本</span><Badge tone="green">v1</Badge></div></div>{robotCheck?.issues?.length > 0 && <div className="check-warning"><TriangleAlert size={14} /> {robotCheck.issues[0].message}</div>}
       </section>
     </div>
     <section className="platform-panel run-summary"><SectionHeader eyebrow="RECENT RUNS" title="最近运行" action={<button className="button button-light" onClick={() => onNavigate("training")}>打开训练台 <ArrowRight size={14} /></button>} />
@@ -210,7 +211,7 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
   </>;
 }
 
-function MotionPipeline({ assets, onDetect, detection, onOpenEditor, onRefresh }) {
+function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDetect, detection, onOpenEditor, onRefresh }) {
   const [path, setPath] = useState("");
   const [assetVersionId, setAssetVersionId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -219,6 +220,8 @@ function MotionPipeline({ assets, onDetect, detection, onOpenEditor, onRefresh }
   const motionAssets = assets.filter((asset) => (asset.kind || asset.version?.kind) === "motion");
   const selectedAsset = motionAssets.find((asset) => asset.version?.asset_version_id === assetVersionId);
   const selectedAssetIsCompiled = /train_motion|TrainMotionNPZ/i.test(`${selectedAsset?.version?.original_filename || ""} ${selectedAsset?.display_name || ""}`);
+  const selectedRobot = robots.find((item) => item.robot_id === selectedRobotId);
+  const robotLabel = selectedRobot?.model || selectedRobot?.robot_id || "目标机器人";
 
   useEffect(() => {
     let cancelled = false;
@@ -246,7 +249,7 @@ function MotionPipeline({ assets, onDetect, detection, onOpenEditor, onRefresh }
     event.preventDefault();
     if (!path.trim() && !assetVersionId) return;
     setBusy(true); setLocalError(null);
-    try { const result = await platformApi.detectMotion({ path: path.trim() || null, assetVersionId: assetVersionId || null }); onDetect(result.descriptor); }
+    try { const result = await platformApi.detectMotion({ path: path.trim() || null, assetVersionId: assetVersionId || null, robotId: selectedRobotId }); onDetect(result.descriptor); }
     catch (error) { setLocalError(error); }
     finally { setBusy(false); }
   };
@@ -255,7 +258,7 @@ function MotionPipeline({ assets, onDetect, detection, onOpenEditor, onRefresh }
     if (!assetVersionId) return;
     setBusy(true); setLocalError(null);
     try {
-      const result = await platformApi.processMotion(assetVersionId, null, "async");
+      const result = await platformApi.processMotion(assetVersionId, { source_motion_version_id: assetVersionId, robot_id: selectedRobotId || robots[0]?.robot_id, global_transform: { translation: [0, 0, 0], yaw_offset: 0, time_scale: 1 }, joint_offsets: [], ik_targets: [], keyframes: [], filters: { smooth: true, max_velocity_check: true } }, "async");
       setPipeline(result.item);
     } catch (error) { setLocalError(error); }
     finally { setBusy(false); }
@@ -267,16 +270,16 @@ function MotionPipeline({ assets, onDetect, detection, onOpenEditor, onRefresh }
   return <>
     <SectionHeader eyebrow="MOTION PIPELINE" title="动作流水线" description="先完成输入校验，再进入 GVHMR → GMR → Motion Compiler。每次编辑都会生成新的 MotionEditConfig 版本。" action={<button className="button button-light" onClick={onOpenEditor}><Play size={14} /> 打开 MuJoCo 预览</button>} />
     {localError && <ErrorBanner error={localError} onDismiss={() => setLocalError(null)} />}
-    <div className="pipeline-track"><div className={`pipeline-step ${stageTone("detect")}`}><span>01</span><strong>检测</strong><small>Schema detector</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("retarget")}`}><span>02</span><strong>Retarget</strong><small>G1 trajectory</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("edit")}`}><span>03</span><strong>编辑</strong><small>Quality gate</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("compile")}`}><span>04</span><strong>编译</strong><small>TrainMotionNPZ</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("publish")}`}><span>05</span><strong>发布</strong><small>AssetVersion</small></div></div>
-    <div className="pipeline-note"><Info size={15} /><span>本地模式支持 NPZ、CSV、PT 的直接 G1 轨迹转换；视频和人体姿态输入会明确停在 GVHMR/GMR 不可用阶段。</span></div>
+    <div className="pipeline-track"><div className={`pipeline-step ${stageTone("detect")}`}><span>01</span><strong>检测</strong><small>Schema detector</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("retarget")}`}><span>02</span><strong>Retarget</strong><small>{robotLabel} trajectory</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("edit")}`}><span>03</span><strong>编辑</strong><small>Quality gate</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("compile")}`}><span>04</span><strong>编译</strong><small>TrainMotionNPZ</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("publish")}`}><span>05</span><strong>发布</strong><small>AssetVersion</small></div></div>
+    <div className="pipeline-note"><Info size={15} /><span>本地模式支持已登记机器人的 NPZ、CSV、PT 直接轨迹转换；视频和人体姿态输入会根据运行时配置进入 GVHMR/GMR。</span></div>
     <div className="platform-columns">
-      <section className="platform-panel"><SectionHeader eyebrow="DETECTOR" title="检测动作源" />
+      <section className="platform-panel"><SectionHeader eyebrow="DETECTOR" title="检测动作源" /><label className="target-robot-field">目标机器人<select value={selectedRobotId || ""} onChange={(event) => onRobotSelect?.(event.target.value)}><option value="">选择机器人</option>{robots.map((item) => <option key={item.robot_id} value={item.robot_id}>{item.model || item.robot_id} · {item.dof} DoF</option>)}</select></label>
         <form className="stack-form" onSubmit={detect}><label>已登记动作<select value={assetVersionId} onChange={(event) => { setAssetVersionId(event.target.value); if (event.target.value) setPath(""); }}><option value="">选择 AssetVersion（推荐）</option>{motionAssets.map((asset) => <option key={asset.version.asset_version_id} value={asset.version.asset_version_id}>{asset.version.original_filename} · v{asset.version.version} · {asset.version.status}</option>)}</select></label><label>或服务器路径<input value={path} onChange={(event) => { setPath(event.target.value); if (event.target.value) setAssetVersionId(""); }} placeholder="/data/motions/walk.npz" /></label><button className="button button-blue" type="submit" disabled={busy || (!path.trim() && !assetVersionId)}>{busy ? <><LoaderCircle size={14} className="spin" /> 检测中</> : <><FileCheck2 size={14} /> 执行检测</>}</button></form>
         {detection && <div className="detection-result"><div><Badge tone="green">VALID</Badge><strong>{detection.detected_type}</strong></div><span>{detection.file_format} · {detection.source_skeleton}</span><small>{detection.detector_version}</small></div>}
         <div className="pipeline-submit"><div><span className="panel-kicker">COMPILE OUTPUT</span><strong>{selectedAssetIsCompiled ? "该资源已经是 TrainMotionNPZ" : selectedAsset?.version?.status === "READY" ? "选择 READY 资源后开始" : "等待资产校验"}</strong><small>{pipeline?.error_code ? `${pipeline.error_code} · ${pipeline.error_message}` : "输出会注册为新的 TrainMotionNPZ AssetVersion"}</small></div><button className="button button-dark" onClick={process} disabled={busy || !assetVersionId || selectedAssetIsCompiled || selectedAsset?.version?.status !== "READY" || ["QUEUED", "RUNNING"].includes(pipeline?.status)}>{busy ? <><LoaderCircle size={14} className="spin" /> 提交中</> : <><GitBranch size={14} /> 处理并发布</>}</button></div>
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="RUNNER STATUS" title="处理器状态" />
-        <div className="check-list"><div><span><Activity size={15} /> 内容检测</span><Badge tone={stageTone("detect")}>{stage("detect")?.status || "READY"}</Badge></div><div><span><GitBranch size={15} /> G1 Retarget</span><Badge tone={stageTone("retarget")}>{stage("retarget")?.status || "PENDING"}</Badge></div><div><span><ShieldCheck size={15} /> 质量门</span><Badge tone={stageTone("edit")}>{stage("edit")?.status || "PENDING"}</Badge></div><div><span><FileCheck2 size={15} /> Motion Compiler</span><Badge tone={stageTone("compile")}>{stage("compile")?.status || "PENDING"}</Badge></div></div>
+        <div className="check-list"><div><span><Activity size={15} /> 内容检测</span><Badge tone={stageTone("detect")}>{stage("detect")?.status || "READY"}</Badge></div><div><span><GitBranch size={15} /> {robotLabel} Retarget</span><Badge tone={stageTone("retarget")}>{stage("retarget")?.status || "PENDING"}</Badge></div><div><span><ShieldCheck size={15} /> 质量门</span><Badge tone={stageTone("edit")}>{stage("edit")?.status || "PENDING"}</Badge></div><div><span><FileCheck2 size={15} /> Motion Compiler</span><Badge tone={stageTone("compile")}>{stage("compile")?.status || "PENDING"}</Badge></div></div>
         {pipeline?.quality && <div className="pipeline-quality"><Badge tone={pipeline.quality.status === "PASS" ? "green" : pipeline.quality.status === "BLOCKED" ? "red" : "amber"}>{pipeline.quality.status}</Badge><span>最大速度 {pipeline.quality.stats?.max_joint_velocity_rad_s?.toFixed?.(2) || "—"} rad/s</span><span>限位违规 {((pipeline.quality.stats?.joint_limit_violation_ratio || 0) * 100).toFixed(2)}%</span></div>}
       </section>
     </div>
@@ -284,7 +287,7 @@ function MotionPipeline({ assets, onDetect, detection, onOpenEditor, onRefresh }
   </>;
 }
 
-function Training({ projects, selectedProjectId, assets, robots, rewardTemplates, runs, selectedRun, onRunCreated, onRunSelect, onRefresh, onProjectRefresh }) {
+function Training({ projects, selectedProjectId, assets, robots, tasks, selectedRobotId, onRobotSelect, rewardTemplates, runs, selectedRun, onRunCreated, onRunSelect, onRefresh, onProjectRefresh }) {
   const [terms, setTerms] = useState([]);
   const [rewardVersion, setRewardVersion] = useState(null);
   const [motionVersionId, setMotionVersionId] = useState("");
@@ -298,7 +301,8 @@ function Training({ projects, selectedProjectId, assets, robots, rewardTemplates
   const [lastSeq, setLastSeq] = useState(0);
   const stopSseRef = useRef(null);
   const motionAssets = assets.filter((asset) => (asset.kind || asset.version?.kind) === "motion" && asset.version?.asset_version_id && asset.version?.status === "READY" && /train_motion|TrainMotionNPZ/i.test(`${asset.version?.original_filename || ""} ${asset.display_name || ""}`));
-  const robot = robots[0];
+  const robot = robots.find((item) => item.robot_id === selectedRobotId) || robots[0];
+  const task = tasks.find((item) => item.robot_id === robot?.robot_id) || tasks[0];
 
   useEffect(() => {
     setTerms(rewardTemplates.map((item) => ({ ...item, enabled: true, weight: item.default_weight, params: Object.fromEntries(Object.entries(item.parameter_schema || {}).map(([key, schema]) => [key, schema.default])) })));
@@ -351,10 +355,11 @@ function Training({ projects, selectedProjectId, assets, robots, rewardTemplates
     setBusy(true); setLocalError(null);
     try {
       if (!terms.some((term) => term.enabled)) throw new PlatformApiError("至少保留一项已注册 shaping reward；安全终止项由平台单独锁定。", { code: "REWARD_TERMS_EMPTY" });
-      const config = { schema_version: "reward_config.v1", base_template: "g1_mimic_v1", terms: terms.filter((term) => term.enabled).map(({ id, weight, params }) => ({ id, enabled: true, weight: Number(weight), params })), terminations: DEFAULT_TERMINATIONS, annealing: annealing === "none" ? [] : [{ term_id: "tracking.joint_pos", start_step: 0, end_step: Number(iterations), mode: annealing }] };
-      const validation = await platformApi.validateReward(config);
+      if (!robot?.robot_id || !task?.task_id) throw new PlatformApiError("请先选择有效的机器人和任务", { code: "TRAINING_SCOPE_REQUIRED" });
+      const config = { schema_version: "reward_config.v1", base_template: `${task.task_id}_v1`, terms: terms.filter((term) => term.enabled).map(({ id, weight, params }) => ({ id, enabled: true, weight: Number(weight), params })), terminations: DEFAULT_TERMINATIONS, annealing: annealing === "none" ? [] : [{ term_id: "tracking.joint_pos", start_step: 0, end_step: Number(iterations), mode: annealing }] };
+      const validation = await platformApi.validateReward(config, robot?.robot_id, task?.task_id);
       if (!validation.result?.valid) throw new PlatformApiError(validation.result?.issues?.[0]?.message || "奖励配置未通过校验", { code: "REWARD_CONFIG_INVALID", details: validation.result?.issues });
-      const result = await platformApi.createReward(config, rewardVersion?.version_id);
+      const result = await platformApi.createReward(config, rewardVersion?.version_id, robot?.robot_id, task?.task_id);
       setRewardVersion(result.item);
     } catch (error) { setLocalError(error); }
     finally { setBusy(false); }
@@ -364,10 +369,17 @@ function Training({ projects, selectedProjectId, assets, robots, rewardTemplates
     if (!selectedProjectId || !motionVersionId || !rewardVersion) return;
     setBusy(true); setLocalError(null);
     try {
-      const trainingConfig = { schema_version: "training_config.v1", task_id: "g1_mimic", scene_id: "g1_flat", motion_asset_version_id: motionVersionId, ppo: { algorithm: "rsl_rl_ppo", max_iterations: Number(iterations) }, resources: { gpu_memory_gb: Number(gpuMemory), cpu_cores: 8, shared_memory_gb: 8, exclusive_gpu: false } };
-      const validation = await platformApi.validateTraining(trainingConfig);
+      if (!robot?.robot_id || !task?.task_id || !task?.scene_id) throw new PlatformApiError("请先选择有效的机器人和任务", { code: "TRAINING_SCOPE_REQUIRED" });
+      const control = robot?.actuation;
+      if (!control || !Number.isFinite(Number(control.policy_dt)) || !Number.isFinite(Number(control.control_dt)) || !Number.isFinite(Number(control.action_scale))) {
+        throw new PlatformApiError("机器人适配器未提供完整控制参数", { code: "ROBOT_CONFIG_INCOMPLETE" });
+      }
+      const actionMode = robot.action_modes?.[0];
+      if (!actionMode) throw new PlatformApiError("机器人适配器未声明动作模式", { code: "ROBOT_ACTION_MODE_MISSING" });
+      const trainingConfig = { schema_version: "training_config.v1", task_id: task.task_id, scene_id: task.scene_id, motion_asset_version_id: motionVersionId, observation: { history_length: 3, include_root_velocity: true, include_projected_gravity: true, include_reference: true, clip_value: 100 }, action: { mode: actionMode, scale: Number(control.action_scale), clip: 1 }, control: { decimation: Math.max(1, Math.round(Number(control.policy_dt) / Number(control.control_dt))), kp_profile: control.kp_profile, kd_profile: control.kd_profile }, ppo: { algorithm: "rsl_rl_ppo", max_iterations: Number(iterations) }, resources: { gpu_memory_gb: Number(gpuMemory), cpu_cores: 8, shared_memory_gb: 8, exclusive_gpu: false } };
+      const validation = await platformApi.validateTraining(trainingConfig, robot?.robot_id);
       if (!validation.result?.valid) throw new PlatformApiError(validation.result?.issues?.[0]?.message || "训练配置未通过校验", { code: "TRAINING_CONFIG_INVALID", details: validation.result?.issues });
-      const run = await platformApi.createRun({ project_id: selectedProjectId, robot: { robot_id: robot?.robot_id || "unitree_g1_29dof" }, motion: { train_motion_asset_version_id: motionVersionId }, reward_config_sha256: rewardVersion.config_sha256, training_config_sha256: await hashJson(trainingConfig), execution: { mode: "async" } });
+      const run = await platformApi.createRun({ project_id: selectedProjectId, robot: { robot_id: robot?.robot_id }, motion: { train_motion_asset_version_id: motionVersionId }, reward_config_sha256: rewardVersion.config_sha256, training_config_sha256: await hashJson(trainingConfig), execution: { mode: "async" } });
       onRunCreated(run.item);
       const submission = await platformApi.submitTraining(run.item.run_id, trainingConfig);
       onRunCreated({ ...run.item, status: "TRAINING_PREPARING", submission: submission.submission });
@@ -401,7 +413,7 @@ function Training({ projects, selectedProjectId, assets, robots, rewardTemplates
   return <>
     <SectionHeader eyebrow="TRAINING & ACCEPTANCE" title="训练监控" description="RewardConfig、TrainingConfig 和 Run 均由后端版本化，长任务通过队列异步执行。" action={<button className="icon-button" title="刷新 Run" onClick={refreshSelected}><RefreshCw size={16} /></button>} />
     {localError && <ErrorBanner error={localError} onDismiss={() => setLocalError(null)} />}
-    <div className="training-context"><div><span className="panel-kicker">ACTIVE PROJECT</span><strong>{projects.find((item) => item.project_id === selectedProjectId)?.name || "未选择项目"}</strong></div><div className="context-meta"><span><Box size={14} /> {robot?.model || robot?.robot_id || "G1 adapter pending"}</span><span><Timer size={14} /> 异步队列 · SSE 实时事件</span></div></div>
+    <div className="training-context"><div><span className="panel-kicker">ACTIVE PROJECT</span><strong>{projects.find((item) => item.project_id === selectedProjectId)?.name || "未选择项目"}</strong></div><div className="context-meta"><span><Box size={14} /> {robot?.model || robot?.robot_id || "Robot adapter pending"}</span><span><Timer size={14} /> {task?.task_id || "未选择任务"} · 异步队列 · SSE 实时事件</span></div></div>
     <div className="training-grid">
       <section className="platform-panel reward-panel"><SectionHeader eyebrow="REWARD BUILDER" title="奖励配置" action={<div className="section-actions">{rewardVersion && <Badge tone="green">v{rewardVersion.version}</Badge>}<button className="button button-light compact" onClick={() => setShowParameters((value) => !value)}>{showParameters ? "收起参数" : "展开参数"}</button></div>} />
         <div className="reward-list">{terms.length ? terms.map((term) => <div className={`reward-row ${term.enabled ? "enabled" : "disabled"}`} key={term.id}><label className="switch"><input type="checkbox" checked={term.enabled} onChange={(event) => updateTerm(term.id, { enabled: event.target.checked })} aria-label={`启用 ${term.id}`} /><span /></label><div className="reward-copy"><strong>{term.name || term.id}</strong><small>{term.description || "注册奖励项"}</small><em>{term.source || "registry"} · {term.unit || "normalized"}</em></div><label className="weight-wrap"><span>权重</span><input className="weight-input" type="number" value={term.weight} step="0.01" onChange={(event) => updateTerm(term.id, { weight: event.target.value })} disabled={!term.enabled} /></label>{showParameters && term.parameter_schema && Object.keys(term.parameter_schema).length > 0 && <div className="reward-params">{Object.entries(term.parameter_schema).map(([key, schema]) => <label key={key}><span>{key}</span><input type="number" value={term.params?.[key] ?? ""} min={schema.minimum} max={schema.maximum} step={schema.multiple_of || "any"} onChange={(event) => updateParam(term.id, key, event.target.value === "" ? "" : Number(event.target.value))} disabled={!term.enabled} /></label>)}</div>}</div>) : <div className="empty-state">正在加载奖励注册表</div>}</div>
@@ -409,9 +421,10 @@ function Training({ projects, selectedProjectId, assets, robots, rewardTemplates
         <button className="button button-dark wide" onClick={saveReward} disabled={busy || !terms.length}>{busy ? <><LoaderCircle size={14} className="spin" /> 保存中</> : <><ShieldCheck size={14} /> 校验并保存版本</>}</button>
       </section>
       <section className="platform-panel train-panel"><SectionHeader eyebrow="RUN BUILDER" title="创建训练 Run" />
-        <div className="form-grid"><label>项目<select value={selectedProjectId || ""} disabled><option value={selectedProjectId}>{projects.find((item) => item.project_id === selectedProjectId)?.name || "选择项目"}</option></select></label><label>动作版本<select value={motionVersionId} onChange={(event) => setMotionVersionId(event.target.value)}><option value="">选择 TrainMotionNPZ</option>{motionAssets.map((asset) => <option key={asset.version.asset_version_id} value={asset.version.asset_version_id}>{asset.version.original_filename} · v{asset.version.version}</option>)}</select></label></div>
+        <div className="form-grid"><label>项目<select value={selectedProjectId || ""} disabled><option value={selectedProjectId}>{projects.find((item) => item.project_id === selectedProjectId)?.name || "选择项目"}</option></select></label><label>机器人<select value={robot?.robot_id || ""} onChange={(event) => onRobotSelect?.(event.target.value)}><option value="">选择机器人</option>{robots.map((item) => <option key={item.robot_id} value={item.robot_id}>{item.model || item.robot_id} · {item.dof} DoF</option>)}</select></label></div>
+        <div className="form-grid"><label>任务<strong className="field-value">{task?.task_id || "未注册"}</strong></label><label>动作版本<select value={motionVersionId} onChange={(event) => setMotionVersionId(event.target.value)}><option value="">选择 TrainMotionNPZ</option>{motionAssets.map((asset) => <option key={asset.version.asset_version_id} value={asset.version.asset_version_id}>{asset.version.original_filename} · v{asset.version.version}</option>)}</select></label></div>
         <div className="form-grid"><label>最大迭代<input type="number" min="1" max="1000000" value={iterations} onChange={(event) => setIterations(event.target.value)} /></label><label>GPU 显存 GB<input type="number" min="1" max="48" value={gpuMemory} onChange={(event) => setGpuMemory(event.target.value)} /></label></div>
-        <div className="run-readiness"><div><span><CheckCircle2 size={14} /> G1 适配器</span><Badge tone={robot ? "green" : "red"}>{robot ? "READY" : "MISSING"}</Badge></div><div><span><CheckCircle2 size={14} /> 奖励版本</span><Badge tone={rewardVersion ? "green" : "amber"}>{rewardVersion ? `v${rewardVersion.version}` : "需保存"}</Badge></div><div><span><CheckCircle2 size={14} /> 动作输入</span><Badge tone={motionVersionId ? "green" : "amber"}>{motionVersionId ? "SELECTED" : "需选择"}</Badge></div></div>
+        <div className="run-readiness"><div><span><CheckCircle2 size={14} /> 机器人适配器</span><Badge tone={robot ? "green" : "red"}>{robot ? "READY" : "MISSING"}</Badge></div><div><span><CheckCircle2 size={14} /> 任务注册</span><Badge tone={task ? "green" : "red"}>{task ? "READY" : "MISSING"}</Badge></div><div><span><CheckCircle2 size={14} /> 奖励版本</span><Badge tone={rewardVersion ? "green" : "amber"}>{rewardVersion ? `v${rewardVersion.version}` : "需保存"}</Badge></div><div><span><CheckCircle2 size={14} /> 动作输入</span><Badge tone={motionVersionId ? "green" : "amber"}>{motionVersionId ? "SELECTED" : "需选择"}</Badge></div></div>
         <button className="button button-blue wide" onClick={createAndSubmitRun} disabled={busy || !selectedProjectId || !motionVersionId || !rewardVersion}><Play size={14} /> 提交异步训练</button>
         <div className="stage-actions"><button className="button button-light" onClick={() => submitStage("export")} disabled={busy || !selectedRun || selectedRun.status !== "TRAINING_SUCCEEDED"}><ArrowRight size={14} /> 导出策略</button><button className="button button-light" onClick={() => submitStage("sim2sim")} disabled={busy || !selectedRun || !["EXPORTED", "SIM2SIM_PASSED"].includes(selectedRun.status)}><ShieldCheck size={14} /> 三种子验收</button></div>
         {selectedRun && <div className="run-control-row"><span>Run {selectedRun.run_id.slice(0, 12)} · {RUN_STATUS_LABELS[selectedRun.status] || selectedRun.status}</span>{["TRAINING", "TRAINING_PREPARING", "SIM2SIM_RUNNING", "SIM2SIM_QUEUED", "EXPORTING"].includes(selectedRun.status) ? <button className="button button-danger" onClick={() => updateRun("cancel")} disabled={busy}><Square size={13} /> 取消</button> : ["FAILED", "CANCELLED"].includes(selectedRun.status) ? <button className="button button-light" onClick={() => updateRun("retry")} disabled={busy}><RotateCcw size={13} /> 重试新 attempt</button> : null}</div>}
@@ -425,7 +438,7 @@ function Training({ projects, selectedProjectId, assets, robots, rewardTemplates
   </>;
 }
 
-function Sim2SimView({ runs, selectedRun, onRunSelect, onNavigate }) {
+function Sim2SimView({ runs, robots, selectedRun, onRunSelect, onNavigate }) {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -446,11 +459,16 @@ function Sim2SimView({ runs, selectedRun, onRunSelect, onNavigate }) {
     return { tone: "amber", title: "动作质量需要复核", copy: "回到动作流水线检查根高度、四元数、限位和接触告警。" };
   }, [report]);
 
+  const runRobotId = selectedRun?.manifest?.robot?.robot_id || selectedRun?.robot?.robot_id;
+  const runRobot = robots.find((item) => item.robot_id === runRobotId);
+  const robotLabel = runRobot?.model || runRobot?.robot_id || runRobotId || "目标机器人";
+  const sim2simLabel = report?.adapter || "sim2sim pending";
+
   return <>
     <SectionHeader eyebrow="SIM2SIM ACCEPTANCE" title="验收报告" description="每个策略包固定运行 3 个随机种子，报告与阈值、版本和模型 hash 一起归档。" action={<button className="button button-light" onClick={() => onNavigate("training")}><Activity size={14} /> 返回训练监控</button>} />
     <div className="acceptance-layout">
       <section className="platform-panel run-picker"><SectionHeader eyebrow="RUNS" title="选择策略 Run" />{runs.length ? <div className="run-list">{runs.map((run) => <button className={`run-row ${selectedRun?.run_id === run.run_id ? "selected" : ""}`} key={run.run_id} onClick={() => onRunSelect(run)}><Badge tone={statusTone(run.status)}>{RUN_STATUS_LABELS[run.status] || run.status}</Badge><span><strong>{run.run_id.slice(0, 12)}</strong><small>{dateLabel(run.updated_at)}</small></span><ArrowRight size={14} /></button>)}</div> : <div className="empty-state">完成训练并导出策略后，这里会出现验收 Run。</div>}</section>
-      <section className="platform-panel acceptance-report">{!selectedRun ? <div className="empty-panel"><ListChecks size={28} /><strong>选择一个 Run 查看验收</strong><span>报告会展示每个 seed 的结果、硬阈值和失败归因。</span></div> : loading ? <div className="empty-panel"><LoaderCircle size={22} className="spin" /><span>正在加载验收报告</span></div> : error ? <div className="empty-panel error-state"><TriangleAlert size={22} /><strong>报告暂不可用</strong><span>{error.message || "该 Run 尚未生成 sim2sim 报告。"}</span><button className="button button-light" onClick={() => onNavigate("training")}>回到训练监控</button></div> : <><div className="report-header"><div><span className="panel-kicker">{report?.adapter || "unitree_g1_mujoco"} · {report?.backend || "pending"}</span><h3>{diagnosis.title}</h3><p>{diagnosis.copy}</p></div><Badge tone={diagnosis.tone}>{report?.status || "PENDING"}</Badge></div><div className="seed-grid">{(report?.evaluations || []).map((evaluation) => <div className={`seed-card ${evaluation.status === "PASSED" ? "passed" : "failed"}`} key={evaluation.seed}><div><strong>Seed {evaluation.seed}</strong><Badge tone={evaluation.status === "PASSED" ? "green" : "red"}>{evaluation.status}</Badge></div><dl><div><dt>存活率</dt><dd>{evaluation.metrics?.survival_rate != null ? `${(evaluation.metrics.survival_rate * 100).toFixed(1)}%` : "—"}</dd></div><div><dt>关节 RMSE</dt><dd>{evaluation.metrics?.joint_rmse_rad != null ? `${evaluation.metrics.joint_rmse_rad.toFixed(3)} rad` : "—"}</dd></div><div><dt>根位置</dt><dd>{evaluation.metrics?.root_position_rmse_m != null ? `${evaluation.metrics.root_position_rmse_m.toFixed(3)} m` : "—"}</dd></div><div><dt>饱和率</dt><dd>{evaluation.metrics?.saturation_ratio != null ? `${(evaluation.metrics.saturation_ratio * 100).toFixed(1)}%` : "—"}</dd></div></dl>{evaluation.failure_code && <small className="seed-failure">{evaluation.failure_code}</small>}</div>)}</div><div className="threshold-block"><div className="threshold-head"><span><ShieldCheck size={15} /> 通过阈值</span><small>Sim2SimPolicy.v1 · 平台硬约束</small></div><div className="threshold-grid">{Object.entries(report?.thresholds || {}).filter(([key]) => key !== "schema_version").map(([key, value]) => <div key={key}><span>{key.replaceAll("_", " ")}</span><strong>{typeof value === "number" && value < 1 ? `${(value * 100).toFixed(0)}%` : value}</strong></div>)}</div></div>{report?.hard_failures?.length > 0 && <div className="failure-list"><strong><TriangleAlert size={15} /> 硬失败原因</strong>{report.hard_failures.map((failure) => <span key={failure}>{failure}</span>)}</div>}<div className="report-actions"><button className="button button-light" onClick={() => onNavigate("motion")}><ArrowRight size={14} /> 回到动作流水线</button><button className="button button-light" onClick={() => onNavigate("training")}><Activity size={14} /> 调整奖励并重训</button><button className="button button-dark" onClick={() => onNavigate("artifacts")}><FileArchive size={14} /> 查看策略包</button></div></>}</section>
+      <section className="platform-panel acceptance-report">{!selectedRun ? <div className="empty-panel"><ListChecks size={28} /><strong>选择一个 Run 查看验收</strong><span>报告会展示每个 seed 的结果、硬阈值和失败归因。</span></div> : loading ? <div className="empty-panel"><LoaderCircle size={22} className="spin" /><span>正在加载验收报告</span></div> : error ? <div className="empty-panel error-state"><TriangleAlert size={22} /><strong>报告暂不可用</strong><span>{error.message || `${robotLabel} 尚未生成 sim2sim 报告。`}</span><button className="button button-light" onClick={() => onNavigate("training")}>回到训练监控</button></div> : <><div className="report-header"><div><span className="panel-kicker">{robotLabel} · {sim2simLabel} · {report?.backend || "backend pending"}</span><h3>{diagnosis.title}</h3><p>{diagnosis.copy}</p></div><Badge tone={diagnosis.tone}>{report?.status || "PENDING"}</Badge></div><div className="seed-grid">{(report?.evaluations || []).map((evaluation) => <div className={`seed-card ${evaluation.status === "PASSED" ? "passed" : "failed"}`} key={evaluation.seed}><div><strong>Seed {evaluation.seed}</strong><Badge tone={evaluation.status === "PASSED" ? "green" : "red"}>{evaluation.status}</Badge></div><dl><div><dt>存活率</dt><dd>{evaluation.metrics?.survival_rate != null ? `${(evaluation.metrics.survival_rate * 100).toFixed(1)}%` : "—"}</dd></div><div><dt>关节 RMSE</dt><dd>{evaluation.metrics?.joint_rmse_rad != null ? `${evaluation.metrics.joint_rmse_rad.toFixed(3)} rad` : "—"}</dd></div><div><dt>根位置</dt><dd>{evaluation.metrics?.root_position_rmse_m != null ? `${evaluation.metrics.root_position_rmse_m.toFixed(3)} m` : "—"}</dd></div><div><dt>饱和率</dt><dd>{evaluation.metrics?.saturation_ratio != null ? `${(evaluation.metrics.saturation_ratio * 100).toFixed(1)}%` : "—"}</dd></div></dl>{evaluation.failure_code && <small className="seed-failure">{evaluation.failure_code}</small>}</div>)}</div><div className="threshold-block"><div className="threshold-head"><span><ShieldCheck size={15} /> 通过阈值</span><small>Sim2SimPolicy.v1 · 平台硬约束</small></div><div className="threshold-grid">{Object.entries(report?.thresholds || {}).filter(([key]) => key !== "schema_version").map(([key, value]) => <div key={key}><span>{key.replaceAll("_", " ")}</span><strong>{typeof value === "number" && value < 1 ? `${(value * 100).toFixed(0)}%` : value}</strong></div>)}</div></div>{report?.hard_failures?.length > 0 && <div className="failure-list"><strong><TriangleAlert size={15} /> 硬失败原因</strong>{report.hard_failures.map((failure) => <span key={failure}>{failure}</span>)}</div>}<div className="report-actions"><button className="button button-light" onClick={() => onNavigate("motion")}><ArrowRight size={14} /> 回到动作流水线</button><button className="button button-light" onClick={() => onNavigate("training")}><Activity size={14} /> 调整奖励并重训</button><button className="button button-dark" onClick={() => onNavigate("artifacts")}><FileArchive size={14} /> 查看策略包</button></div></>}</section>
     </div>
   </>;
 }
@@ -494,6 +512,8 @@ export default function PlatformWorkbench({ onOpenEditor }) {
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [robots, setRobots] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [selectedRobotId, setSelectedRobotId] = useState("");
   const [robotCheck, setRobotCheck] = useState(null);
   const [rewardTemplates, setRewardTemplates] = useState([]);
   const [assets, setAssets] = useState([]);
@@ -506,17 +526,22 @@ export default function PlatformWorkbench({ onOpenEditor }) {
   const refresh = async () => {
     setLoading(true); setError(null);
     try {
-      const [nextHealth, nextInfra, nextProjects, nextRobots, nextRewards] = await Promise.all([platformApi.health(), platformApi.infrastructureHealth(), platformApi.listProjects(), platformApi.listRobots(), platformApi.rewardTemplates()]);
-      setHealth(nextHealth); setInfrastructure(nextInfra); setProjects(nextProjects.items || []); setRobots(nextRobots.items || []); setRewardTemplates(nextRewards.items || []);
-      if (nextRobots.items?.[0]?.robot_id) {
-        try { setRobotCheck((await platformApi.robotSelfCheck(nextRobots.items[0].robot_id)).result); } catch { setRobotCheck(null); }
+      const [nextHealth, nextInfra, nextProjects, nextRobots] = await Promise.all([platformApi.health(), platformApi.infrastructureHealth(), platformApi.listProjects(), platformApi.listRobots()]);
+      setHealth(nextHealth); setInfrastructure(nextInfra); setProjects(nextProjects.items || []); setRobots(nextRobots.items || []);
+      const activeRobotId = nextRobots.items?.find((item) => item.robot_id === selectedRobotId)?.robot_id || nextRobots.items?.[0]?.robot_id || "";
+      setSelectedRobotId(activeRobotId);
+      let activeTasks = [];
+      try { activeTasks = (await platformApi.listTasks(activeRobotId)).items || []; setTasks(activeTasks); } catch { setTasks([]); }
+      try { setRewardTemplates((await platformApi.rewardTemplates(activeRobotId, activeTasks[0]?.task_id)).items || []); } catch { setRewardTemplates([]); }
+      if (activeRobotId) {
+        try { setRobotCheck((await platformApi.robotSelfCheck(activeRobotId)).result); } catch { setRobotCheck(null); }
       } else setRobotCheck(null);
       setSelectedProjectId((current) => current || nextProjects.items?.[0]?.project_id || "");
     } catch (loadError) { setError(loadError); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [selectedRobotId]);
 
   useEffect(() => {
     if (!selectedProjectId) { setAssets([]); setRuns([]); return undefined; }
@@ -552,12 +577,12 @@ export default function PlatformWorkbench({ onOpenEditor }) {
 
   const content = useMemo(() => {
     if (view === "assets") return <Assets projects={projects} selectedProjectId={selectedProjectId} onSelectProject={setSelectedProjectId} onProjectCreated={createProject} onAssetCreated={addAsset} assets={assets} onNavigate={(target) => setView(target)} />;
-    if (view === "motion") return <MotionPipeline assets={assets} detection={detection} onDetect={setDetection} onOpenEditor={onOpenEditor} onRefresh={refreshProject} />;
-    if (view === "training") return <Training projects={projects} selectedProjectId={selectedProjectId} assets={assets} robots={robots} rewardTemplates={rewardTemplates} runs={runs} selectedRun={selectedRun} onRunCreated={addRun} onRunSelect={selectRun} onRefresh={refresh} onProjectRefresh={refreshProject} />;
-    if (view === "sim2sim") return <Sim2SimView runs={runs} selectedRun={selectedRun} onRunSelect={selectRun} onNavigate={setView} />;
+    if (view === "motion") return <MotionPipeline assets={assets} robots={robots} selectedRobotId={selectedRobotId} onRobotSelect={setSelectedRobotId} detection={detection} onDetect={setDetection} onOpenEditor={onOpenEditor} onRefresh={refreshProject} />;
+    if (view === "training") return <Training projects={projects} selectedProjectId={selectedProjectId} assets={assets} robots={robots} tasks={tasks} selectedRobotId={selectedRobotId} onRobotSelect={setSelectedRobotId} rewardTemplates={rewardTemplates} runs={runs} selectedRun={selectedRun} onRunCreated={addRun} onRunSelect={selectRun} onRefresh={refresh} onProjectRefresh={refreshProject} />;
+    if (view === "sim2sim") return <Sim2SimView runs={runs} robots={robots} selectedRun={selectedRun} onRunSelect={selectRun} onNavigate={setView} />;
     if (view === "artifacts") return <ArtifactsView runs={runs} selectedRun={selectedRun} onRunSelect={selectRun} onNavigate={setView} />;
     return <Overview health={health} infrastructure={infrastructure} projects={projects} robots={robots} robotCheck={robotCheck} runs={runs} onNavigate={(target, id) => { setView(target); if (id) selectRun({ run_id: id }); }} onRefresh={refresh} />;
-  }, [assets, detection, health, infrastructure, loading, onOpenEditor, projects, refreshProject, rewardTemplates, robotCheck, robots, runs, selectedProjectId, selectedRun, view]);
+  }, [assets, detection, health, infrastructure, loading, onOpenEditor, projects, refreshProject, rewardTemplates, robotCheck, robots, runs, selectedProjectId, selectedRobotId, selectedRun, tasks, view]);
 
   return <div className="app-shell platform-shell"><aside className="rail"><div className="brand-mark">RL</div><div className="rail-line" />{NAV_ITEMS.map(({ id, icon: Icon, label }) => <button key={id} className={`rail-button ${view === id ? "active" : ""}`} title={label} aria-label={label} onClick={() => setView(id)}><Icon size={18} /></button>)}<div className="rail-spacer" /><button className="rail-button" title="MuJoCo 编辑器" aria-label="MuJoCo 编辑器" onClick={onOpenEditor}><Play size={18} /></button><button className="rail-button" title="设置" aria-label="设置"><Settings2 size={18} /></button><div className="rail-user" aria-label="当前用户">HY</div></aside><main className="main-shell"><header className="topbar"><div className="crumb"><span className="crumb-muted">AllRobotRLLLab</span><span className="crumb-divider">/</span><strong>{NAV_ITEMS.find((item) => item.id === view)?.label || "总览"}</strong></div><div className="top-actions"><div className={`service-state ${health?.status === "ok" ? "online" : "offline"}`}><span className="live-dot" /> {loading ? "连接中" : health?.status === "ok" ? "Platform API" : "服务离线"}</div><button className="button button-light" onClick={onOpenEditor}><Play size={14} /> MuJoCo 预览</button></div></header><div className="platform-content"><ErrorBanner error={error} onDismiss={() => setError(null)} /><WorkflowStrip view={view} selectedRun={selectedRun} onNavigate={setView} />{content}</div><footer className="statusbar"><div><span className="status-label">API</span><strong>{platformApi.baseUrl}</strong></div><div><span className="status-label">PROJECT</span><strong>{projects.find((item) => item.project_id === selectedProjectId)?.name || "未选择"}</strong></div><div className="status-spacer" /><div className="status-note"><CircleHelp size={14} /> Local File Mode · 后端事实源</div></footer></main></div>;
 }

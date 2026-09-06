@@ -149,9 +149,22 @@ export ISAACSIM_PATH=/opt/isaac-sim
 export GMR_PATH=$PWD/third_party/GMR-master
 export GVHMR_PATH=$PWD/third_party/GVHMR-main
 export UNITREE_MUJOCO_PATH=$PWD/third_party/unitree_mujoco-main
+export UNITREE_RL_LAB_PATH=$PWD/third_party/unitree_rl_lab-main
+export G1_MJCF_PATH=$GMR_PATH/assets/unitree_g1/g1_mocap_29dof.xml
 export G1_ISAAC_URDF_PATH=/opt/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.urdf
-python scripts/collect_runtime_manifest.py --output .runtime/runtime-manifest.json
+python scripts/check_external_runtime.py --profile gpu --json
+python scripts/collect_runtime_manifest.py --profile gpu --output .runtime/runtime-manifest.json
 ```
+
+训练 provider 通过 `P3_BACKEND` 选择。`P3_BACKEND=unitree_rl_lab` 仅启用 G1 的外部 Unitree provider；`P3_BACKEND=isaac_lab` 选择平台的 `NativeIsaacLabProvider`，必须显式配置平台任务入口命令（训练模板可使用 `{run_id}`、`{task}`、`{motion}`、`{output}`、`{config}`、`{manifest}`；导出/回放模板可使用 `{checkpoint}`）：
+
+```bash
+export P3_BACKEND=isaac_lab
+export NATIVE_ISAAC_TRAIN_COMMAND="$ISAAC_PYTHON -m apps.isaac_tasks.entrypoint train --task {task} --manifest {manifest} --output {output}"
+export NATIVE_ISAAC_EXPORT_COMMAND="$ISAAC_PYTHON -m apps.isaac_tasks.entrypoint export --task {task} --checkpoint {checkpoint} --output {output}"
+```
+
+机器人、任务和 provider 的扩展边界见 [docs/多机器人架构实施状态.md](docs/多机器人架构实施状态.md)。
 
 Isaac Sim 5.1 may be installed as the `isaacsim==5.1.0.0` Python package
 inside the active Conda environment instead of an `isaac-sim.sh` checkout. In
@@ -182,3 +195,17 @@ Unitree RL Lab 的 G1 29 DoF mimic 配置使用 Unitree ROS 的
 USD），因此不要求预先提供本地 `G1_USD_PATH`。设置
 `G1_ISAAC_URDF_PATH` 后，runtime manifest 会单独记录该训练 URDF 的路径、
 大小和 SHA-256；`G1_USD_PATH` 仅用于实际选择 USD spawn 配置的任务。
+### Multi-robot adapter configuration
+
+The default process loads only `adapters.unitree_g1_29dof`. To enable the
+public H1 adapter in a deployment, set the module list explicitly and provide
+the external model path (third-party assets stay outside this repository):
+
+```bash
+export ROBOT_ADAPTER_MODULES=adapters.unitree_g1_29dof,adapters.unitree_h1_19dof
+export H1_MJCF_PATH=/opt/assets/unitree_h1/h1.xml
+export H1_SIM2SIM_COMMAND='python /opt/h1_sim/evaluate.py --seed {seed} --policy {policy} --output {output}'
+```
+
+The H1 task is registered as `h1_mimic` and uses the generic MuJoCo runner;
+its command must emit the six standard sim2sim metrics in `metrics.json`.

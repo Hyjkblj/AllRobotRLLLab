@@ -45,6 +45,12 @@ def _license() -> LicenseInfo:
     return LicenseInfo(status="declared", source="user", processing_scope="platform motion processing")
 
 
+def _trajectory_type(robot_id: str | None) -> str:
+    # The vendor-specific label is emitted only when G1 was explicitly
+    # selected. Unscoped uploads must remain portable across RobotSpecs.
+    return "g1_joint_trajectory" if robot_id == "unitree_g1_29dof" else "joint_trajectory"
+
+
 def _array_field(path: str, value: Any, *, include_value: bool = False) -> ArrayField:
     array = np.asarray(value)
     if array.dtype.kind == "O":
@@ -61,14 +67,14 @@ class Detector(Protocol):
     name: str
     extensions: tuple[str, ...]
 
-    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False) -> SourceMotionDescriptor | None: ...
+    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False, target_dof: int | None = None, robot_id: str | None = None) -> SourceMotionDescriptor | None: ...
 
 
 class NpzDetector:
     name = "npz-motion-detector.v1"
     extensions = (".npz",)
 
-    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False) -> SourceMotionDescriptor | None:
+    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False, target_dof: int | None = None, robot_id: str | None = None) -> SourceMotionDescriptor | None:
         try:
             archive = np.load(path, allow_pickle=False)
         except Exception as exc:
@@ -94,8 +100,10 @@ class NpzDetector:
             candidate_name = next((name for name in ("joint_pos", "dof_pos", "qpos") if name in keys), None)
             if candidate_name is not None:
                 values = archive[candidate_name]
-                if values.ndim != 2 or values.shape[0] < 15 or values.shape[1] not in (29, 36):
-                    raise MotionDetectionError("SCHEMA_INVALID", "G1 trajectory must have shape [N, 29] or [N, 36]", details={"shape": list(values.shape)})
+                expected_dof = target_dof or (int(values.shape[1]) if values.ndim == 2 else 0)
+                valid_width = values.ndim == 2 and values.shape[1] > 0 and (target_dof is None or values.shape[1] in (expected_dof, expected_dof + 7))
+                if values.ndim != 2 or values.shape[0] < 15 or not valid_width:
+                    raise MotionDetectionError("SCHEMA_INVALID", "trajectory shape is incompatible with the selected robot", details={"shape": list(values.shape), "expected_dof": target_dof})
                 names: list[str] = []
                 if "joint_names" in keys:
                     raw_names = archive["joint_names"]
@@ -113,8 +121,8 @@ class NpzDetector:
                 return SourceMotionDescriptor(
                     asset_version_id=asset_version_id,
                     file_format="npz",
-                    detected_type="g1_joint_trajectory",
-                    source_skeleton="unitree_g1_29dof",
+                    detected_type=_trajectory_type(robot_id),
+                    source_skeleton=robot_id,
                     fields=fields,
                     joint_names=names,
                     coord_frame="world_z_up",
@@ -147,7 +155,7 @@ class CsvDetector:
     name = "csv-motion-detector.v1"
     extensions = (".csv",)
 
-    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False) -> SourceMotionDescriptor | None:
+    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False, target_dof: int | None = None, robot_id: str | None = None) -> SourceMotionDescriptor | None:
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as stream:
                 reader = csv.reader(stream)
@@ -166,10 +174,11 @@ class CsvDetector:
                     columns = header[1:]
                 else:
                     columns = header
-                if len(columns) != 29:
+                expected_dof = target_dof or len(columns)
+                if not expected_dof or (target_dof is not None and len(columns) != expected_dof):
                     return None
-                if joint_names and len(joint_names) != 29:
-                    raise MotionDetectionError("SCHEMA_INVALID", "# joint_names must declare 29 names")
+                if joint_names and len(joint_names) != expected_dof:
+                    raise MotionDetectionError("SCHEMA_INVALID", f"# joint_names must declare {expected_dof} names")
                 if not joint_names:
                     joint_names = columns
                 if len(set(joint_names)) != len(joint_names):
@@ -178,7 +187,7 @@ class CsvDetector:
                 for row in reader:
                     if len(row) != len(header):
                         raise MotionDetectionError("SCHEMA_INVALID", "CSV row column count does not match header", details={"row": frames + 1})
-                    values = [float(value) for value in (row[2:] if header[:2] == ["time_s", "phase"] else row[-29:])]
+                    values = [float(value) for value in (row[2:] if header[:2] == ["time_s", "phase"] else row[-expected_dof:])]
                     if not np.isfinite(values).all():
                         raise MotionDetectionError("NONFINITE_VALUE", "CSV contains NaN or Inf")
                     frames += 1
@@ -191,9 +200,9 @@ class CsvDetector:
         return SourceMotionDescriptor(
             asset_version_id=asset_version_id,
             file_format="csv",
-            detected_type="g1_joint_trajectory",
-            source_skeleton="unitree_g1_29dof",
-            fields={"joint_pos": ArrayField(path="rows[-29:]", shape=[frames, 29], dtype="float64")},
+            detected_type=_trajectory_type(robot_id),
+            source_skeleton=robot_id,
+            fields={"joint_pos": ArrayField(path=f"rows[-{expected_dof}:]", shape=[frames, expected_dof], dtype="float64")},
             joint_names=joint_names,
             coord_frame="world_z_up",
             quaternion_convention="xyzw",
@@ -206,7 +215,7 @@ class PtDetector:
     name = "pt-motion-detector.v1"
     extensions = (".pt",)
 
-    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False) -> SourceMotionDescriptor | None:
+    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False, target_dof: int | None = None, robot_id: str | None = None) -> SourceMotionDescriptor | None:
         try:
             import torch
         except ImportError as exc:
@@ -222,12 +231,13 @@ class PtDetector:
         for key in ("joint_pos", "dof_pos", "qpos"):
             if key in payload and hasattr(payload[key], "shape"):
                 values = payload[key].detach().cpu().numpy()
-                if values.ndim == 2 and values.shape[1] in (29, 36):
+                expected_dof = target_dof or (int(values.shape[1]) if values.ndim == 2 else 0)
+                if values.ndim == 2 and values.shape[1] > 0 and (target_dof is None or values.shape[1] in (expected_dof, expected_dof + 7)):
                     return SourceMotionDescriptor(
                         asset_version_id=asset_version_id,
                         file_format="pt",
-                        detected_type="g1_joint_trajectory",
-                        source_skeleton="unitree_g1_29dof",
+                        detected_type=_trajectory_type(robot_id),
+                        source_skeleton=robot_id,
                         fields={key: _array_field(key, values)},
                         coord_frame="world_z_up",
                         quaternion_convention="xyzw",
@@ -241,7 +251,7 @@ class PklDetector:
     name = "pkl-motion-detector.v1"
     extensions = (".pkl",)
 
-    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False) -> SourceMotionDescriptor | None:
+    def inspect(self, path: Path, *, asset_version_id: str, trusted_pickle: bool = False, target_dof: int | None = None, robot_id: str | None = None) -> SourceMotionDescriptor | None:
         if not trusted_pickle:
             raise MotionDetectionError("UNTRUSTED_PICKLE", "ordinary uploads cannot be parsed as pickle; use NPZ, CSV or PT")
         try:
@@ -253,16 +263,27 @@ class PklDetector:
             for key in ("joint_pos", "dof_pos", "qpos"):
                 if key in payload:
                     values = np.asarray(payload[key])
-                    if values.ndim == 2 and values.shape[1] in (29, 36):
-                        return SourceMotionDescriptor(asset_version_id=asset_version_id, file_format="pkl", detected_type="g1_joint_trajectory", source_skeleton="unitree_g1_29dof", fields={key: _array_field(key, values)}, coord_frame="world_z_up", quaternion_convention="xyzw", license=_license(), detector_version=self.name)
+                    expected_dof = target_dof or (int(values.shape[1]) if values.ndim == 2 else 0)
+                    if values.ndim == 2 and values.shape[1] > 0 and (target_dof is None or values.shape[1] in (expected_dof, expected_dof + 7)):
+                        return SourceMotionDescriptor(asset_version_id=asset_version_id, file_format="pkl", detected_type=_trajectory_type(robot_id), source_skeleton=robot_id, fields={key: _array_field(key, values)}, coord_frame="world_z_up", quaternion_convention="xyzw", license=_license(), detector_version=self.name)
         return None
 
 
 @dataclass(frozen=True)
 class MotionSourceRegistry:
     detectors: tuple[Detector, ...] = (NpzDetector(), CsvDetector(), PtDetector(), PklDetector())
+    # Unscoped detection is intentionally generic. Production motion
+    # pipelines pass the selected RobotSpec's DoF and robot id explicitly.
+    default_dof: int | None = None
+    default_robot_id: str | None = None
 
-    def detect(self, path: Path, *, asset_version_id: str | None = None, trusted_pickle: bool = False) -> SourceMotionDescriptor:
+    @classmethod
+    def legacy_g1(cls) -> "MotionSourceRegistry":
+        """Construct the pre-registry detector for legacy G1 integrations."""
+
+        return cls(default_dof=29, default_robot_id="unitree_g1_29dof")
+
+    def detect(self, path: Path, *, asset_version_id: str | None = None, trusted_pickle: bool = False, target_dof: int | None = None, robot_id: str | None = None) -> SourceMotionDescriptor:
         resolved = path.resolve()
         if not resolved.is_file():
             raise MotionDetectionError("INPUT_NOT_FOUND", f"motion source does not exist: {resolved}")
@@ -271,8 +292,10 @@ class MotionSourceRegistry:
         if not matching:
             raise MotionDetectionError("UNSUPPORTED_SOURCE_TYPE", f"unsupported motion extension: {suffix}")
         matches: list[SourceMotionDescriptor] = []
+        effective_dof = target_dof if target_dof is not None else self.default_dof
+        effective_robot_id = robot_id if robot_id is not None else self.default_robot_id
         for detector in matching:
-            descriptor = detector.inspect(resolved, asset_version_id=asset_version_id or sha256_file(resolved), trusted_pickle=trusted_pickle)
+            descriptor = detector.inspect(resolved, asset_version_id=asset_version_id or sha256_file(resolved), trusted_pickle=trusted_pickle, target_dof=effective_dof, robot_id=effective_robot_id)
             if descriptor is not None:
                 matches.append(descriptor)
         if len(matches) == 0:

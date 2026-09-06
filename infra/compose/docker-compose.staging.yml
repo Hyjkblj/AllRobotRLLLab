@@ -91,11 +91,13 @@ services:
         condition: service_completed_successfully
     environment:
       APP_ENV: staging
-      PLATFORM_ROLE: worker-cpu
+      PLATFORM_ROLE: api
+      RUNTIME_PROFILE: api
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
       P3_BACKEND: ${P3_BACKEND:-isaac_lab}
+      ROBOT_ADAPTER_MODULES: ${ROBOT_ADAPTER_MODULES:-adapters.unitree_g1_29dof}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
@@ -126,20 +128,45 @@ services:
         condition: service_completed_successfully
     environment:
       APP_ENV: staging
-      PLATFORM_ROLE: worker-gpu
+      PLATFORM_ROLE: worker-cpu
+      RUNTIME_PROFILE: motion-cpu
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
       P3_BACKEND: ${P3_BACKEND:-isaac_lab}
+      ROBOT_ADAPTER_MODULES: ${ROBOT_ADAPTER_MODULES:-adapters.unitree_g1_29dof}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET:-allrobotrl}
       MINIO_SECURE: "false"
       WORKER_AUTH_TOKEN: ${WORKER_AUTH_TOKEN:?WORKER_AUTH_TOKEN must be set}
+      G1_MJCF_PATH: /opt/GMR/assets/unitree_g1/g1_mocap_29dof.xml
+      H1_MJCF_PATH: /opt/H1/h1.xml
+      H1_SIM2SIM_COMMAND: ${H1_SIM2SIM_COMMAND:-}
     volumes:
       - staging-runtime:/app/.runtime
+      - ${GMR_PATH:-/opt/GMR}:/opt/GMR:ro
+      - ${H1_ASSET_PATH:-/opt/H1}:/opt/H1:ro
     command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "cpu,asset-io,motion-cpu"]
+
+  outbox-dispatcher:
+    image: ${PLATFORM_IMAGE:-allrobotrl-platform:${IMAGE_TAG:-local}}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: staging
+      PLATFORM_ROLE: outbox-dispatcher
+      RUNTIME_PROFILE: api
+      DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "backend.app.workers.outbox_worker"]
 
   worker-gpu:
     profiles: ["gpu"]
@@ -156,10 +183,13 @@ services:
         condition: service_completed_successfully
     environment:
       APP_ENV: staging
+      PLATFORM_ROLE: worker-gpu
+      RUNTIME_PROFILE: gpu
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
       P3_BACKEND: ${P3_BACKEND:-isaac_lab}
+      ROBOT_ADAPTER_MODULES: ${ROBOT_ADAPTER_MODULES:-adapters.unitree_g1_29dof}
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
@@ -173,6 +203,11 @@ services:
       UNITREE_MUJOCO_PATH: /opt/unitree_mujoco
       UNITREE_RL_LAB_PATH: /opt/unitree_rl_lab
       G1_MJCF_PATH: /opt/GMR/assets/unitree_g1/g1_mocap_29dof.xml
+      H1_MJCF_PATH: /opt/H1/h1.xml
+      H1_SIM2SIM_COMMAND: ${H1_SIM2SIM_COMMAND:-}
+      NATIVE_ISAAC_TRAIN_COMMAND: ${NATIVE_ISAAC_TRAIN_COMMAND:-}
+      NATIVE_ISAAC_EXPORT_COMMAND: ${NATIVE_ISAAC_EXPORT_COMMAND:-}
+      NATIVE_ISAAC_PLAY_COMMAND: ${NATIVE_ISAAC_PLAY_COMMAND:-}
     volumes:
       - staging-runtime:/app/.runtime
       - ${ISAACLAB_PATH:-/opt/IsaacLab}:/opt/IsaacLab:ro
@@ -181,6 +216,7 @@ services:
       - ${GVHMR_PATH:-/opt/GVHMR}:/opt/GVHMR:ro
       - ${UNITREE_MUJOCO_PATH:-/opt/unitree_mujoco}:/opt/unitree_mujoco:ro
       - ${UNITREE_RL_LAB_PATH:-/opt/unitree_rl_lab}:/opt/unitree_rl_lab:ro
+      - ${H1_ASSET_PATH:-/opt/H1}:/opt/H1:ro
     gpus: all
     command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "isaac-gpu,sim2sim-gpu,motion-gpu", "--concurrency=1"]
 

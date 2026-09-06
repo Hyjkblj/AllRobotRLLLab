@@ -17,3 +17,10 @@ def test_sim2sim_threshold_failure_is_diagnostic() -> None:
     assert "SEED_1_SURVIVAL_LOW" in report.hard_failures
     assert "SEED_1_JOINT_RMSE_HIGH" in report.hard_failures
 
+
+def test_non_finite_metrics_fail_report() -> None:
+    adapter = FakeSim2SimAdapter()
+    evaluation = adapter.evaluate(1).model_copy(update={"metrics": {"survival_rate": float("nan")}})
+    report = build_sim2sim_report(run_id="run-1", adapter=adapter.name, backend=adapter.backend, evaluations=[evaluation] * 3)
+    assert report.status == "FAILED"
+    assert "SEED_1_METRIC_INVALID_survival_rate" in report.hard_failures

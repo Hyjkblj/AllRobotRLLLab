@@ -260,7 +260,7 @@ class PostgresOutboxRepository(_Repository):
 
     def pending(self, limit: int = 100) -> list[OutboxEvent]:
         with self.connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute("select * from outbox_events where published_at is null order by created_at limit %s", (limit,))
+            cursor.execute("select * from outbox_events where published_at is null order by created_at for update skip locked limit %s", (limit,))
             return [_outbox(row) for row in cursor.fetchall()]
 
     def mark_published(self, event_id: str, published_at: str) -> OutboxEvent | None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import os
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,7 @@ class GmrRunner:
         self.workspace = Path(workspace).resolve()
         self.timeout_seconds = timeout_seconds
 
-    def run(self, *, source_path: Path, output_dir: Path | None = None, robot: str = "unitree_g1") -> tuple[Path, ExternalRunResult]:
+    def run(self, *, source_path: Path, output_dir: Path | None = None, robot: str | None = None, target_dof: int | None = None) -> tuple[Path, ExternalRunResult]:
         check = self.registry.require("gmr")
         source = Path(source_path).resolve()
         if not source.is_file():
@@ -40,29 +41,33 @@ class GmrRunner:
         target = Path(output_dir or self.workspace / "gmr").resolve()
         target.mkdir(parents=True, exist_ok=True)
         output = target / "retarget_motion.pkl"
+        custom_command = os.getenv("GMR_COMMAND", "").strip()
+        if not robot and not custom_command:
+            raise RunnerError("GMR_ROBOT_REQUIRED", "a target robot mapping is required when GMR_COMMAND is not explicitly configured")
+        robot_name = robot or "unscoped"
         if source.suffix.lower() == ".pt":
             script = Path(check.path or ".") / "scripts" / "gvhmr_to_robot.py"
-            default = [check.python or "python", str(script), "--gvhmr_pred_file", str(source), "--robot", robot, "--save_path", str(output)]
+            default = [check.python or "python", str(script), "--gvhmr_pred_file", str(source), "--robot", robot_name, "--save_path", str(output)]
         elif source.suffix.lower() == ".bvh":
             script = Path(check.path or ".") / "scripts" / "bvh_to_robot.py"
-            default = [check.python or "python", str(script), "--bvh_file", str(source), "--robot", robot, "--save_path", str(output)]
+            default = [check.python or "python", str(script), "--bvh_file", str(source), "--robot", robot_name, "--save_path", str(output)]
         else:
             raise RunnerError("GMR_INPUT_UNSUPPORTED", f"GMR accepts GVHMR .pt or BVH input, got {source.suffix}")
         command = command_from_env("GMR_COMMAND", default=default)
         if command and any("{input}" in item or "{output}" in item for item in command):
-            command = tuple(item.format(input=str(source), output=str(output), robot=robot) for item in command)
-        result = run_external(stage="gmr", workspace=target, command=command or default, timeout_seconds=self.timeout_seconds, env={"GMR_INPUT": str(source), "GMR_OUTPUT": str(output), "GMR_ROBOT": robot})
+            command = tuple(item.format(input=str(source), output=str(output), robot=robot_name) for item in command)
+        result = run_external(stage="gmr", workspace=target, command=command or default, timeout_seconds=self.timeout_seconds, env={"GMR_INPUT": str(source), "GMR_OUTPUT": str(output), "GMR_ROBOT": robot_name})
         if not output.is_file():
             candidates = sorted(target.glob("*.pkl"))
             output = candidates[0] if candidates else None
         if output is None or not output.is_file():
             raise RunnerError("RUNTIME_OUTPUT_MISSING", "GMR completed without a retarget output")
-        normalized = self._validate_and_normalize(output, target)
+        normalized = self._validate_and_normalize(output, target, target_dof=target_dof, robot_id=robot_name)
         manifest = write_output_manifest(target, stage="gmr", outputs=[output, normalized], metadata={"runtime": check.as_dict(), "adapter_version": self.version, "robot": robot})
         return normalized, ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {"retarget_motion": normalized, "source_pickle": output}, manifest)
 
     @staticmethod
-    def _validate_and_normalize(path: Path, root: Path) -> Path:
+    def _validate_and_normalize(path: Path, root: Path, *, target_dof: int | None = None, robot_id: str = "unscoped") -> Path:
         try:
             with path.open("rb") as stream:
                 payload = pickle.load(stream)
@@ -71,8 +76,11 @@ class GmrRunner:
         if not isinstance(payload, dict):
             raise RunnerError("GMR_OUTPUT_SCHEMA_INVALID", "GMR output must be a dictionary")
         dof = _as_array(payload, ("dof_pos", "joint_pos", "qpos"))
-        if dof.shape[1] not in (29, 36):
-            raise RunnerError("GMR_OUTPUT_SCHEMA_INVALID", f"G1 output must contain 29 DoF, got {dof.shape[1]}")
+        if target_dof is None:
+            names = payload.get("joint_names")
+            target_dof = len(names) if isinstance(names, (list, tuple)) and names else dof.shape[1]
+        if dof.shape[1] not in (target_dof, target_dof + 7):
+            raise RunnerError("GMR_OUTPUT_SCHEMA_INVALID", f"{robot_id} output must contain {target_dof} DoF, got {dof.shape[1]}")
         root_pos = _as_array(payload, ("root_pos", "base_pos"))
         root_rot = _as_array(payload, ("root_rot", "base_rot"))
         if root_pos.shape != (dof.shape[0], 3) or root_rot.shape != (dof.shape[0], 4):
@@ -82,7 +90,7 @@ class GmrRunner:
             raise RunnerError("GMR_OUTPUT_SCHEMA_INVALID", "GMR fps must be between 15 and 120")
         # Keep a stable, safe-to-consume NPZ alongside the original pickle.
         normalized = root / "retarget_motion.npz"
-        np.savez_compressed(normalized, joint_pos=dof[:, :29], root_pos=root_pos, root_rot=root_rot, fps=np.asarray(fps, dtype=np.float32), joint_names=np.asarray(payload.get("joint_names", [])))
+        np.savez_compressed(normalized, joint_pos=dof[:, :target_dof], root_pos=root_pos, root_rot=root_rot, fps=np.asarray(fps, dtype=np.float32), joint_names=np.asarray(payload.get("joint_names", [])))
         return normalized
 
 
