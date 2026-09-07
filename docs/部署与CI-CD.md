@@ -91,6 +91,14 @@ profile 应保持停止，不能把 CPU smoke 结果当作真实验收。
 
 Compose 中 API、CPU worker 和 GPU worker 分别使用 `api`、`motion-cpu`、`gpu` runtime profile。运行时检查脚本和 CLI doctor 支持同名 `--profile` 参数；不要使用未声明的 profile 绕过必需依赖检查。
 
+四个进程都显式设置 `ROBOTLAB_RUNTIME_DIR=/app/.runtime` 并挂载同一个
+`staging-runtime` 卷。这样 runtime registration、Run Manifest、外部进程
+marker 和训练中间产物在 API、worker、outbox 重启后仍指向同一目录；不要在
+Compose 服务中改回镜像内的 `/app/runtime`。GPU worker 启动时还会检查真实
+backend 的命令模板：`P3_BACKEND=isaac_lab` 必须提供三个
+`NATIVE_ISAAC_*_COMMAND`，`P3_BACKEND=unitree_mujoco` 必须提供
+`UNITREE_SIM2SIM_COMMAND`，缺失时应让 worker fail fast。
+
 `migrate` 一次性服务会在 API/worker 前取得 PostgreSQL advisory lock，按文件名顺序执行未记录的迁移并写入 `schema_migrations`。这使已有数据库卷也能安全接收后续迁移；不要删除持久化卷来“解决”迁移问题。`004_p3_run_state.sql` 持久化训练配置、checkpoint、导出元数据、策略包和 sim2sim 报告。API 与 worker 共享 `staging-runtime` 卷，最终产物仍必须写入 MinIO。
 
 验证 worker 重启恢复：提交一个 async train 后重启 worker，任务重新投递或重试时应保持相同 checkpoint id；随后从新的 worker 进程提交 export/sim2sim，不能依赖旧 API 进程内存。对应的本地契约测试是 `test_p3_state_survives_training_service_recreation` 和 `test_worker_replay_is_idempotent_after_completed_train`。

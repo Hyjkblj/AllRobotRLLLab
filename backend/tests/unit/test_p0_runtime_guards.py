@@ -96,6 +96,19 @@ def test_staging_compose_assigns_process_roles_to_the_correct_services() -> None
     assert re.search(r"(?ms)^      RUNTIME_PROFILE: gpu$", _service_block(document, "worker-gpu"))
 
 
+def test_staging_compose_shares_runtime_root_across_processes() -> None:
+    document = Path("infra/compose/docker-compose.staging.yml").read_text(encoding="utf-8")
+    for service in ("api", "worker-cpu", "outbox-dispatcher", "worker-gpu"):
+        assert re.search(r"(?ms)^      ROBOTLAB_RUNTIME_DIR: /app/\.runtime$", _service_block(document, service)), service
+        assert "staging-runtime:/app/.runtime" in _service_block(document, service), service
+
+
+def test_staging_compose_requires_unitree_rl_lab_for_gpu_worker() -> None:
+    document = Path("infra/compose/docker-compose.staging.yml").read_text(encoding="utf-8")
+    worker = _service_block(document, "worker-gpu")
+    assert "UNITREE_RL_LAB_PATH: /opt/unitree_rl_lab" in worker
+
+
 def test_deployed_motion_profile_requires_the_g1_mjcf(monkeypatch) -> None:
     original = (settings.app_env, settings.platform_role, settings.runtime_profile, settings.g1_mjcf_path)
     try:

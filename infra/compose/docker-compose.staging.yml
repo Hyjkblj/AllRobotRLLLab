@@ -93,6 +93,9 @@ services:
       APP_ENV: staging
       PLATFORM_ROLE: api
       RUNTIME_PROFILE: api
+      # Keep registrations, manifests, durable run state and local staging
+      # files on the same named volume for API, workers and outbox.
+      ROBOTLAB_RUNTIME_DIR: /app/.runtime
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
@@ -130,6 +133,7 @@ services:
       APP_ENV: staging
       PLATFORM_ROLE: worker-cpu
       RUNTIME_PROFILE: motion-cpu
+      ROBOTLAB_RUNTIME_DIR: /app/.runtime
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async
@@ -164,8 +168,11 @@ services:
       APP_ENV: staging
       PLATFORM_ROLE: outbox-dispatcher
       RUNTIME_PROFILE: api
+      ROBOTLAB_RUNTIME_DIR: /app/.runtime
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - staging-runtime:/app/.runtime
     command: ["python", "-m", "backend.app.workers.outbox_worker"]
 
   worker-gpu:
@@ -185,6 +192,7 @@ services:
       APP_ENV: staging
       PLATFORM_ROLE: worker-gpu
       RUNTIME_PROFILE: gpu
+      ROBOTLAB_RUNTIME_DIR: /app/.runtime
       DATABASE_URL: postgresql://${POSTGRES_USER:-allrobotrl}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-allrobotrl}
       REDIS_URL: redis://redis:6379/0
       EXECUTION_MODE: async

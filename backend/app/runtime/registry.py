@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import hashlib
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,9 +61,22 @@ class RuntimeRegistry:
             raise RuntimeUnavailable("runtime registration storage is not configured")
         registrations = self._registrations()
         selected_revision = revision or self._git_revision(resolved) or f"content:{self._source_hash(resolved)}"
-        registrations[name] = {"path": str(resolved), "python": str(python or ""), "revision": str(selected_revision)}
+        python_value = str(python or "").strip()
+        if python_value:
+            python_path = Path(python_value).expanduser()
+            # Accept either an absolute interpreter path (the recommended
+            # production form) or a command discoverable on PATH.  This keeps
+            # registration portable between Linux containers and Windows/WSL
+            # while still rejecting a typo before it reaches a worker.
+            if not python_path.is_file() and shutil.which(python_value) is None:
+                raise RuntimeUnavailable(f"python executable does not exist or is not on PATH: {python_value}")
+        registrations[name] = {"path": str(resolved), "python": python_value, "revision": str(selected_revision)}
         self.registration_path.parent.mkdir(parents=True, exist_ok=True)
-        self.registration_path.write_text(json.dumps(registrations, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        # Replace atomically so a worker never observes a truncated JSON file
+        # when registration is performed while the stack is running.
+        temporary = self.registration_path.with_name(self.registration_path.name + ".tmp")
+        temporary.write_text(json.dumps(registrations, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, self.registration_path)
         return self.check(spec)
 
     @staticmethod
@@ -107,8 +121,10 @@ class RuntimeRegistry:
         if expected_revision and not revision_match:
             errors.append(f"revision mismatch: expected {expected_revision}, got {revision or 'unknown'}")
         python = os.getenv(spec.python_env or "", "").strip() or str(registration.get("python", "")).strip() or None
-        if python and not Path(python).expanduser().exists():
-            errors.append(f"{spec.python_env} does not point to an executable: {python}")
+        if python:
+            python_path = Path(python).expanduser()
+            if not python_path.is_file() and shutil.which(python) is None:
+                errors.append(f"{spec.python_env} does not point to an executable: {python}")
         return RuntimeCheck(spec.name, True, not errors, path=str(path), revision=revision, expected_revision=expected_revision, python=python, errors=tuple(errors))
 
     def doctor(self, *, required_only: bool = False, profile: str | None = None) -> dict[str, Any]:

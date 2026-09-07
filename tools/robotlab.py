@@ -148,13 +148,16 @@ def _doctor(args: argparse.Namespace) -> int:
         if variable == "DATABASE_URL":
             placeholder = placeholder or any(marker in env("POSTGRES_PASSWORD").lower() for marker in ("replace-with", "changeme", "allrobotrl_dev_only"))
         checks[variable] = {"ok": bool(value) and not placeholder, "configured": bool(value), "placeholder": placeholder, "fix": f"Set {variable} in .env.staging or the server secret manager"}
-    runtime_variables = ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH")
+    # Keep this list in lock-step with the ``gpu`` runtime profile.  Omitting
+    # UNITREE_RL_LAB_PATH here made ``robotlab doctor --mode compose`` report
+    # green while the GPU worker could not resolve its training provider.
+    runtime_variables = ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_RL_LAB_PATH", "UNITREE_MUJOCO_PATH")
     registration_file = runtime_root / "runtime-registrations.json"
     try:
         registration_document = json.loads(registration_file.read_text(encoding="utf-8")) if registration_file.is_file() else {}
     except (OSError, ValueError, TypeError):
         registration_document = {}
-    registration_names = {"ISAACLAB_PATH": "isaac_lab", "ISAACSIM_PATH": "isaac_sim", "GMR_PATH": "gmr", "GVHMR_PATH": "gvhmr", "UNITREE_MUJOCO_PATH": "unitree_mujoco"}
+    registration_names = {"ISAACLAB_PATH": "isaac_lab", "ISAACSIM_PATH": "isaac_sim", "GMR_PATH": "gmr", "GVHMR_PATH": "gvhmr", "UNITREE_RL_LAB_PATH": "unitree_rl_lab", "UNITREE_MUJOCO_PATH": "unitree_mujoco"}
     for variable in runtime_variables:
         registration = registration_document.get(registration_names[variable], {}) if isinstance(registration_document, dict) else {}
         value = env(variable) or (str(registration.get("path", "")) if isinstance(registration, dict) else "")

@@ -20,6 +20,33 @@ def test_runtime_registry_registers_embedded_source_by_content_hash(tmp_path: Pa
     assert stored["gmr"]["revision"].startswith("content:")
 
 
+def test_runtime_registry_accepts_path_or_path_command_for_python(tmp_path: Path, monkeypatch) -> None:
+    runtime = tmp_path / "gmr"
+    runtime.mkdir()
+    registry = RuntimeRegistry(registration_path=tmp_path / "registrations.json")
+
+    # A command name is valid when it resolves on PATH; this is how slim
+    # containers commonly expose their interpreter.
+    monkeypatch.setattr("backend.app.runtime.registry.shutil.which", lambda value: "/usr/bin/python" if value == "python" else None)
+    check = registry.register("gmr", path=runtime, python="python")
+    assert check.available
+    assert check.python == "python"
+
+
+def test_runtime_registry_rejects_invalid_python_before_persisting(tmp_path: Path) -> None:
+    runtime = tmp_path / "gmr"
+    runtime.mkdir()
+    registration_path = tmp_path / "registrations.json"
+    registry = RuntimeRegistry(registration_path=registration_path)
+    try:
+        registry.register("gmr", path=runtime, python=str(tmp_path / "missing-python"))
+    except Exception as exc:
+        assert getattr(exc, "code", "") == "RUNTIME_UNAVAILABLE"
+    else:
+        raise AssertionError("invalid Python interpreter was accepted")
+    assert not registration_path.exists()
+
+
 def test_gmr_runner_normalizes_fixture_output(tmp_path: Path, monkeypatch) -> None:
     runtime = tmp_path / "gmr"
     runtime.mkdir()

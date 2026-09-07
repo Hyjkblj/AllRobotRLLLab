@@ -106,6 +106,19 @@ class Settings:
             errors.append("WORKER_AUTH_TOKEN still contains a development placeholder")
         if self.p3_backend == "fake_smoke":
             errors.append("P3_BACKEND must select a real Isaac/Unitree backend in staging/production; fake_smoke is development-only")
+        # A worker that advertises a real backend must be able to construct
+        # every command used by that backend before it starts consuming queue
+        # messages.  API-only processes intentionally skip this check so they
+        # remain dependency-free and can expose health/doctor endpoints while
+        # a GPU worker is being prepared.
+        if self.platform_role in {"gpu", "worker-gpu"} or self.runtime_profile in {"gpu", "isaac-gpu", "native-isaac-gpu", "sim2sim-gpu"}:
+            command_requirements = {
+                "isaac_lab": ("NATIVE_ISAAC_TRAIN_COMMAND", "NATIVE_ISAAC_EXPORT_COMMAND", "NATIVE_ISAAC_PLAY_COMMAND"),
+                "unitree_mujoco": ("UNITREE_SIM2SIM_COMMAND",),
+            }
+            for variable in command_requirements.get(self.p3_backend, ()):
+                if not os.getenv(variable, "").strip():
+                    errors.append(f"{variable} is required for P3_BACKEND={self.p3_backend} on a GPU worker")
         if self.require_external_runtime or runtime_names(self.runtime_profile):
             runtime_paths = {
                 "gmr": self.gmr_path,

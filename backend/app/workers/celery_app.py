@@ -67,7 +67,10 @@ def create_celery_app():
     training_providers = runtime_adapters["providers"] if settings.p3_backend != "fake_smoke" else {}
     sim2sim_adapters = runtime_adapters["sim2sim_adapters"] if settings.p3_backend != "fake_smoke" else {}
     reward_config_store = RewardConfigVersionStore(RewardRegistry(), storage_path=settings.runtime_root / "reward_configs.json")
-    training_service = TrainingService(run_service=run_service, robot_adapter=adapter, robot_registry=robot_registry, task_registry=task_registry, training_providers=training_providers, sim2sim_adapters=sim2sim_adapters, training_provider_registry=runtime_adapters.get("training_provider_registry"), sim2sim_registry=runtime_adapters.get("sim2sim_registry"), workspace=settings.repository_root / ".runtime" / "p3", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter, reward_config_store=reward_config_store)
+    # The worker must use the same shared runtime root as the API.  Using the
+    # repository-relative .runtime path here would split checkpoints and
+    # process markers from the registered runtime volume in Compose mode.
+    training_service = TrainingService(run_service=run_service, robot_adapter=adapter, robot_registry=robot_registry, task_registry=task_registry, training_providers=training_providers, sim2sim_adapters=sim2sim_adapters, training_provider_registry=runtime_adapters.get("training_provider_registry"), sim2sim_registry=runtime_adapters.get("sim2sim_registry"), workspace=settings.runtime_root / "p3", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter, reward_config_store=reward_config_store)
     motion_pipeline_service = MotionPipelineService(
         uow=uow,
         object_store=object_store,

@@ -46,3 +46,31 @@ def test_deployed_worker_never_falls_back_to_cpu_smoke(tmp_path) -> None:
             raise AssertionError("deployed worker accepted the CPU smoke fallback")
     finally:
         settings.app_env, settings.p3_backend = original
+
+
+def test_gpu_worker_requires_native_isaac_command_templates(monkeypatch) -> None:
+    original = (settings.app_env, settings.platform_role, settings.runtime_profile, settings.p3_backend)
+    try:
+        settings.app_env = "staging"
+        settings.platform_role = "worker-gpu"
+        settings.runtime_profile = "gpu"
+        settings.p3_backend = "isaac_lab"
+        for variable in ("NATIVE_ISAAC_TRAIN_COMMAND", "NATIVE_ISAAC_EXPORT_COMMAND", "NATIVE_ISAAC_PLAY_COMMAND"):
+            monkeypatch.delenv(variable, raising=False)
+        errors = settings.deployment_errors()
+        assert all(any(variable in error for error in errors) for variable in ("NATIVE_ISAAC_TRAIN_COMMAND", "NATIVE_ISAAC_EXPORT_COMMAND", "NATIVE_ISAAC_PLAY_COMMAND"))
+    finally:
+        settings.app_env, settings.platform_role, settings.runtime_profile, settings.p3_backend = original
+
+
+def test_gpu_worker_requires_unitree_sim2sim_wrapper(monkeypatch) -> None:
+    original = (settings.app_env, settings.platform_role, settings.runtime_profile, settings.p3_backend)
+    try:
+        settings.app_env = "staging"
+        settings.platform_role = "worker-gpu"
+        settings.runtime_profile = "gpu"
+        settings.p3_backend = "unitree_mujoco"
+        monkeypatch.delenv("UNITREE_SIM2SIM_COMMAND", raising=False)
+        assert any("UNITREE_SIM2SIM_COMMAND" in error for error in settings.deployment_errors())
+    finally:
+        settings.app_env, settings.platform_role, settings.runtime_profile, settings.p3_backend = original
