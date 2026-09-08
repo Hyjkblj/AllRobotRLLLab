@@ -143,7 +143,11 @@ class TrainingService:
         config = self.configs.get(run_id, config)
         if run.status == RunStatus.TRAINING_PREPARING:
             self.run_service.transition_run(run_id=run_id, target=RunStatus.TRAINING, stage="training", message="P3 smoke training started")
-        output_dir = self.workspace / "runs" / run_id / attempt.attempt_id
+        # ``workspace`` is already the durable ``runtime/runs`` root supplied
+        # by the composition root.  Keep the run directory aligned with the
+        # process marker, manifest and documented layout instead of inserting
+        # a second ``runs`` segment.
+        output_dir = self.workspace / run_id / attempt.attempt_id
         output_dir.mkdir(parents=True, exist_ok=True)
         adapter = self._adapter_for_run(run)
         robot = adapter.get_spec()
@@ -184,7 +188,11 @@ class TrainingService:
         config = self.configs.get(run_id, effective_config)
         if run.status == RunStatus.TRAINING_PREPARING:
             self.run_service.transition_run(run_id=run_id, target=RunStatus.TRAINING, stage="training", message="Isaac Lab training started")
-        output_dir = self.workspace / "runs" / run_id / attempt.attempt_id
+        # ``workspace`` is already the durable ``runtime/runs`` root supplied
+        # by the composition root.  Keep the run directory aligned with the
+        # process marker, manifest and documented layout instead of inserting
+        # a second ``runs`` segment.
+        output_dir = self.workspace / run_id / attempt.attempt_id
         try:
             motion_path = self._materialize_asset(config.motion_asset_version_id, output_dir / "input" / "train_motion.npz")
             provider_config = config.model_dump(mode="json")
