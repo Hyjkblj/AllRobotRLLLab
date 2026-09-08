@@ -51,6 +51,15 @@ def test_unitree_provider_passes_upstream_task_id_to_runner() -> None:
     assert result["task_id"] == "Unitree-G1-29dof-Mimic-Gangnanm-Style"
 
 
+def test_isaac_checkpoint_discovery_rejects_metadata_json(tmp_path: Path) -> None:
+    # A metadata-only checkpoint must not make an external training run look
+    # successful. Real providers are required to emit binary weights.
+    (tmp_path / "checkpoint.json").write_text("{}", encoding="utf-8")
+    assert IsaacLabRunner._find_checkpoint(tmp_path) is None
+    (tmp_path / "checkpoint.pt").write_bytes(b"weights")
+    assert IsaacLabRunner._find_checkpoint(tmp_path) == tmp_path / "checkpoint.pt"
+
+
 def test_native_isaac_provider_writes_and_passes_run_manifest(tmp_path: Path, monkeypatch) -> None:
     isaac_lab = tmp_path / "isaac_lab"
     isaac_sim = tmp_path / "isaac_sim"

@@ -95,7 +95,16 @@ class IsaacLabRunner:
 
     @staticmethod
     def _find_checkpoint(root: Path) -> Path | None:
-        candidates = sorted(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in {".pt", ".pth", ".ckpt", ".json"} and any(token in path.name.lower() for token in ("checkpoint", "model", "policy", "agent")))
+        # A real Isaac/RSL-RL run must emit a binary weight artifact.  JSON
+        # files such as ``training_config.json`` or a smoke ``checkpoint.json``
+        # are metadata only and must never satisfy the external-training gate.
+        candidates = sorted(
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and path.suffix.lower() in {".pt", ".pth", ".ckpt", ".safetensors"}
+            and any(token in path.name.lower() for token in ("checkpoint", "model", "policy", "agent"))
+        )
         return candidates[0] if candidates else None
 
     @staticmethod
