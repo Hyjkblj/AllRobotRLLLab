@@ -33,7 +33,6 @@ class RuntimeRegistry:
         RuntimeSpec("gvhmr", "GVHMR_PATH", "6ec3ca3", "GVHMR_PYTHON"),
         RuntimeSpec("isaac_lab", "ISAACLAB_PATH", "3c6e67bb5", "ISAAC_PYTHON"),
         RuntimeSpec("isaac_sim", "ISAACSIM_PATH", None, "ISAAC_PYTHON"),
-        RuntimeSpec("unitree_rl_lab", "UNITREE_RL_LAB_PATH", None, "ISAAC_PYTHON", required=True),
         RuntimeSpec("unitree_mujoco", "UNITREE_MUJOCO_PATH", "ae6a840", "SIM2SIM_PYTHON"),
     )
 

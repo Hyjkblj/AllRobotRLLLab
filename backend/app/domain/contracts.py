@@ -701,7 +701,6 @@ class RuntimeVersions(ContractModel):
     isaac_lab_git: str = "v2.3.0@3c6e67bb5"
     isaac_lab_package: str = "0.47.2"
     isaac_sim_package: str = "5.1.0.0"
-    unitree_rl_lab_package: str = "0.2.1"
     unitree_mujoco_git: str = "ae6a840"
     gmr_git: str = "bb1bbe4"
     gvhmr_git: str = "6ec3ca3"

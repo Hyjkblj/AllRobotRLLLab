@@ -11,7 +11,7 @@ from backend.app.runtime.isaac_runner import IsaacLabRunner
 from backend.app.runtime.registry import RuntimeRegistry
 from backend.app.runtime.unitree_sim2sim_runner import UnitreeMuJoCoRunner
 from backend.app.runtime.mujoco_runner import MuJoCoRunner
-from backend.app.runtime.providers import NativeIsaacLabProvider, UnitreeRLLabProvider
+from backend.app.runtime.providers import NativeIsaacLabProvider
 from backend.app.application.provider_catalog import Sim2SimRegistry, TrainingProviderRegistry
 
 
@@ -20,10 +20,9 @@ def build_runtime_adapters(settings: Settings, *, workspace: Path, robot_registr
     gmr = GmrRunner(registry=registry, workspace=workspace / "gmr")
     gvhmr = GVHMRRunner(registry=registry, workspace=workspace / "gvhmr")
     isaac = IsaacLabRunner(registry=registry, workspace=workspace / "isaac")
-    unitree_provider = UnitreeRLLabProvider(isaac)
     native_provider = NativeIsaacLabProvider(registry=registry, workspace=workspace / "native-isaac")
     sim2sim = UnitreeMuJoCoRunner(registry=registry, workspace=workspace / "sim2sim")
-    training_provider_registry = TrainingProviderRegistry((unitree_provider, native_provider))
+    training_provider_registry = TrainingProviderRegistry((native_provider,))
     sim2sim_values: list[object] = [sim2sim]
     if robot_registry is not None:
         for adapter in robot_registry.list():
@@ -55,7 +54,7 @@ def build_runtime_adapters(settings: Settings, *, workspace: Path, robot_registr
         "gvhmr": gvhmr,
         # ``isaac`` remains a compatibility alias for the legacy runner.
         "isaac": isaac,
-        "providers": {"unitree_rl_lab": unitree_provider, "native_isaac_lab": native_provider},
+        "providers": {"isaac_lab": native_provider, "native_isaac_lab": native_provider},
         "training_provider_registry": training_provider_registry,
         "native_isaac": native_provider,
         "sim2sim": sim2sim,

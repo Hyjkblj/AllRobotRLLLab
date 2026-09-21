@@ -18,9 +18,8 @@ RUNTIME_PROFILES: Final[dict[str, tuple[str, ...]]] = {
     # checked separately.
     "motion-cpu": (),
     "motion-gpu": ("gmr", "gvhmr"),
-    "isaac-gpu": ("isaac_lab", "isaac_sim", "unitree_rl_lab"),
-    # Native platform task entrypoints intentionally do not require the
-    # Unitree provider checkout.
+    "isaac-gpu": ("isaac_lab", "isaac_sim"),
+    # Native platform task entrypoints use only Isaac Lab and Isaac Sim.
     "native-isaac-gpu": ("isaac_lab", "isaac_sim"),
     "sim2sim-gpu": ("unitree_mujoco",),
     # The GPU worker consumes motion, Isaac and sim2sim queues in one image.
@@ -29,7 +28,6 @@ RUNTIME_PROFILES: Final[dict[str, tuple[str, ...]]] = {
         "gvhmr",
         "isaac_lab",
         "isaac_sim",
-        "unitree_rl_lab",
         "unitree_mujoco",
     ),
 }
@@ -65,8 +63,6 @@ def infer_profile(*, platform_role: str, p3_backend: str, explicit: str | None =
         return "sim2sim-gpu"
     if p3_backend == "isaac_lab":
         return "native-isaac-gpu"
-    if p3_backend == "unitree_rl_lab":
-        return "isaac-gpu"
     if p3_backend == "gmr_gvhmr":
         return "motion-gpu"
     return "api"

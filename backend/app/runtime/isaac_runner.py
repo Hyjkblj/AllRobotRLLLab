@@ -1,10 +1,14 @@
-"""Isaac Lab/Unitree RL Lab process adapter."""
+"""Platform-owned Isaac Lab process adapter.
+
+The runner only talks to the platform task entrypoint contract.  Task code is
+selected with command templates and runs in the Isaac environment, so the API
+process never imports or depends on a vendor training repository.
+"""
 
 from __future__ import annotations
 
 import json
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -23,74 +27,56 @@ class IsaacLabRunner:
         self.timeout_seconds = timeout_seconds
 
     def _runtime_checks(self):
-        """Resolve the three runtimes used by Unitree's Isaac entry points."""
-
-        isaac_lab = self.registry.require("isaac_lab")
-        isaac_sim = self.registry.require("isaac_sim")
-        unitree_rl_lab = self.registry.require("unitree_rl_lab")
-        return isaac_lab, isaac_sim, unitree_rl_lab
+        return self.registry.require("isaac_lab"), self.registry.require("isaac_sim")
 
     def train(self, *, run_id: str, task_id: str, motion_path: Path, config: dict[str, Any], output_dir: Path | None = None) -> TrainingExecution:
-        isaac_lab, isaac_sim, unitree_rl_lab = self._runtime_checks()
+        isaac_lab, isaac_sim = self._runtime_checks()
         target = Path(output_dir or self.workspace / run_id / "train").resolve()
         target.mkdir(parents=True, exist_ok=True)
         config_path = target / "training_config.json"
         config_path.write_text(json.dumps({"run_id": run_id, "task_id": task_id, "motion_path": str(Path(motion_path).resolve()), "config": config}, ensure_ascii=False, sort_keys=True, indent=2), encoding="utf-8")
-        rl_path = Path(unitree_rl_lab.path or ".")
-        python = unitree_rl_lab.python or isaac_lab.python or isaac_sim.python or "python"
-        default = [python, str(rl_path / "scripts" / "rsl_rl" / "train.py"), "--headless", "--task", task_id]
-        command = command_from_env("ISAAC_TRAIN_COMMAND", default=default)
-        command = tuple(item.format(run_id=run_id, task=task_id, motion=str(motion_path), output=str(target), config=str(config_path)) for item in (command or default))
+        default = None
+        command = command_from_env("NATIVE_ISAAC_TRAIN_COMMAND", default=default)
+        if not command:
+            raise RunnerError("ISAAC_TRAIN_COMMAND_MISSING", "NATIVE_ISAAC_TRAIN_COMMAND must be configured")
+        command = tuple(item.format(run_id=run_id, task=task_id, motion=str(motion_path), output=str(target), config=str(config_path), manifest="") for item in command)
         result = run_external(stage="isaac_train", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_RUN_ID": run_id, "ALLROBOTRL_MOTION": str(motion_path), "ALLROBOTRL_OUTPUT": str(target), "ALLROBOTRL_CONFIG": str(config_path)})
         checkpoint = self._find_checkpoint(target)
         if checkpoint is None:
             raise RunnerError("ISAAC_CHECKPOINT_MISSING", "Isaac Lab completed without a checkpoint", details={"workspace": str(target)})
         metrics = self._read_metrics(target)
-        manifest = write_output_manifest(target, stage="isaac_train", outputs=[checkpoint, *self._metric_files(target)], metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict(), unitree_rl_lab.as_dict()], "adapter_version": self.version, "task_id": task_id})
+        manifest = write_output_manifest(target, stage="isaac_train", outputs=[checkpoint, *self._metric_files(target)], metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict()], "adapter_version": self.version, "task_id": task_id})
         result = ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {"checkpoint": checkpoint}, manifest)
         iteration = int(metrics[-1].get("iteration", config.get("ppo", {}).get("max_iterations", 0))) if metrics else int(config.get("ppo", {}).get("max_iterations", 0))
         return TrainingExecution(checkpoint_path=checkpoint, iteration=iteration, metrics=metrics, result=result)
 
     def export(self, *, checkpoint_path: Path, task_id: str, output_dir: Path | None = None) -> ExternalRunResult:
-        isaac_lab, isaac_sim, unitree_rl_lab = self._runtime_checks()
+        isaac_lab, isaac_sim = self._runtime_checks()
         target = Path(output_dir or checkpoint_path.parent / "export").resolve()
         target.mkdir(parents=True, exist_ok=True)
-        rl_path = Path(unitree_rl_lab.path or ".")
-        python = unitree_rl_lab.python or isaac_lab.python or isaac_sim.python or "python"
-        default = [python, str(rl_path / "scripts" / "rsl_rl" / "play.py"), "--task", task_id, "--checkpoint", str(checkpoint_path)]
-        command = command_from_env("ISAAC_EXPORT_COMMAND", default=default)
-        command = tuple(item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target)) for item in (command or default))
+        command = command_from_env("NATIVE_ISAAC_EXPORT_COMMAND")
+        if not command:
+            raise RunnerError("ISAAC_EXPORT_COMMAND_MISSING", "NATIVE_ISAAC_EXPORT_COMMAND must be configured")
+        command = tuple(item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target), run_id="", motion="", config="", manifest="") for item in command)
         result = run_external(stage="isaac_export", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_CHECKPOINT": str(checkpoint_path), "ALLROBOTRL_OUTPUT": str(target)})
         outputs = [path for path in target.rglob("*") if path.is_file() and path.name != "isaac_export.json"]
-        # Unitree RL Lab's play.py writes exported/policy.{pt,onnx} beside
-        # the checkpoint. Copy those files into the platform-owned output
-        # directory so artifact publication is independent of that layout.
-        if not outputs:
-            upstream_export = checkpoint_path.parent / "exported"
-            if upstream_export.is_dir():
-                for source in upstream_export.iterdir():
-                    if source.is_file():
-                        target_file = target / source.name
-                        shutil.copy2(source, target_file)
-                outputs = [path for path in target.iterdir() if path.is_file()]
         if not outputs:
             raise RunnerError("ISAAC_EXPORT_OUTPUT_MISSING", "Isaac Lab export produced no files")
-        manifest = write_output_manifest(target, stage="isaac_export", outputs=outputs, metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict(), unitree_rl_lab.as_dict()], "adapter_version": self.version})
+        manifest = write_output_manifest(target, stage="isaac_export", outputs=outputs, metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict()], "adapter_version": self.version, "task_id": task_id})
         return ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {path.name: path for path in outputs}, manifest)
 
     def play(self, *, checkpoint_path: Path, task_id: str, output_dir: Path | None = None) -> ExternalRunResult:
         """Run headless policy playback without changing the Run state."""
-        isaac_lab, isaac_sim, unitree_rl_lab = self._runtime_checks()
+        isaac_lab, isaac_sim = self._runtime_checks()
         target = Path(output_dir or checkpoint_path.parent / "play").resolve()
         target.mkdir(parents=True, exist_ok=True)
-        rl_path = Path(unitree_rl_lab.path or ".")
-        python = unitree_rl_lab.python or isaac_lab.python or isaac_sim.python or "python"
-        default = [python, str(rl_path / "scripts" / "rsl_rl" / "play.py"), "--headless", "--task", task_id, "--checkpoint", str(checkpoint_path)]
-        command = command_from_env("ISAAC_PLAY_COMMAND", default=default)
-        command = tuple(item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target)) for item in (command or default))
+        command = command_from_env("NATIVE_ISAAC_PLAY_COMMAND")
+        if not command:
+            raise RunnerError("ISAAC_PLAY_COMMAND_MISSING", "NATIVE_ISAAC_PLAY_COMMAND must be configured")
+        command = tuple(item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target), run_id="", motion="", config="", manifest="") for item in command)
         result = run_external(stage="isaac_play", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_CHECKPOINT": str(checkpoint_path), "ALLROBOTRL_OUTPUT": str(target)})
         outputs = [path for path in target.rglob("*") if path.is_file() and "manifest" not in path.parts]
-        manifest = write_output_manifest(target, stage="isaac_play", outputs=outputs or [target / "logs" / "isaac_play.json"], metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict(), unitree_rl_lab.as_dict()], "adapter_version": self.version, "task_id": task_id})
+        manifest = write_output_manifest(target, stage="isaac_play", outputs=outputs or [target / "logs" / "isaac_play.json"], metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict()], "adapter_version": self.version, "task_id": task_id})
         return ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {path.name: path for path in outputs}, manifest)
 
     @staticmethod

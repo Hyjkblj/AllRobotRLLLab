@@ -149,15 +149,14 @@ def _doctor(args: argparse.Namespace) -> int:
             placeholder = placeholder or any(marker in env("POSTGRES_PASSWORD").lower() for marker in ("replace-with", "changeme", "allrobotrl_dev_only"))
         checks[variable] = {"ok": bool(value) and not placeholder, "configured": bool(value), "placeholder": placeholder, "fix": f"Set {variable} in .env.staging or the server secret manager"}
     # Keep this list in lock-step with the ``gpu`` runtime profile.  Omitting
-    # UNITREE_RL_LAB_PATH here made ``robotlab doctor --mode compose`` report
     # green while the GPU worker could not resolve its training provider.
-    runtime_variables = ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_RL_LAB_PATH", "UNITREE_MUJOCO_PATH")
+    runtime_variables = ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH")
     registration_file = runtime_root / "runtime-registrations.json"
     try:
         registration_document = json.loads(registration_file.read_text(encoding="utf-8")) if registration_file.is_file() else {}
     except (OSError, ValueError, TypeError):
         registration_document = {}
-    registration_names = {"ISAACLAB_PATH": "isaac_lab", "ISAACSIM_PATH": "isaac_sim", "GMR_PATH": "gmr", "GVHMR_PATH": "gvhmr", "UNITREE_RL_LAB_PATH": "unitree_rl_lab", "UNITREE_MUJOCO_PATH": "unitree_mujoco"}
+    registration_names = {"ISAACLAB_PATH": "isaac_lab", "ISAACSIM_PATH": "isaac_sim", "GMR_PATH": "gmr", "GVHMR_PATH": "gvhmr", "UNITREE_MUJOCO_PATH": "unitree_mujoco"}
     for variable in runtime_variables:
         registration = registration_document.get(registration_names[variable], {}) if isinstance(registration_document, dict) else {}
         value = env(variable) or (str(registration.get("path", "")) if isinstance(registration, dict) else "")
@@ -168,7 +167,7 @@ def _doctor(args: argparse.Namespace) -> int:
     runtime_script = ROOT / "scripts" / "check_external_runtime.py"
     if all(checks[name].get("ok") for name in runtime_variables):
         runtime_env = os.environ.copy()
-        runtime_env.update({name: env(name) for name in ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH", "UNITREE_RL_LAB_PATH")})
+        runtime_env.update({name: env(name) for name in ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH")})
         result = subprocess.run([sys.executable, str(runtime_script), "--registration", str(registration_file)], cwd=ROOT, env=runtime_env, capture_output=True, text=True, check=False)
         checks["external_runtime"] = {"ok": result.returncode == 0, "required": gpu_required, "details": (result.stdout + result.stderr).strip(), "fix": "Check the pinned Git SHA values in README.md"}
     else:
@@ -399,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
     runtime_doctor.add_argument("--profile", choices=tuple(RUNTIME_PROFILES), default=None)
     runtime_doctor.add_argument("--json", action="store_true")
     runtime_register = runtime_sub.add_parser("register")
-    runtime_register.add_argument("name", choices=("gmr", "gvhmr", "isaac_lab", "isaac_sim", "unitree_rl_lab", "unitree_mujoco"))
+    runtime_register.add_argument("name", choices=("gmr", "gvhmr", "isaac_lab", "isaac_sim", "unitree_mujoco"))
     runtime_register.add_argument("--path", required=True)
     runtime_register.add_argument("--python", default=None)
     runtime_register.add_argument("--revision", default=None)
@@ -480,3 +479,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

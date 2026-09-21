@@ -64,10 +64,10 @@ object_store = build_object_store(settings)
 asset_service = AssetService(uow, object_store)
 artifact_service = ArtifactService(uow, object_store)
 runtime_adapters = assembly.runtime_adapters
-training_runner = runtime_adapters["providers"].get(settings.p3_backend) if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_rl_lab"} else None
+training_runner = runtime_adapters["providers"].get(settings.p3_backend) if settings.p3_backend in {"native_isaac_lab", "isaac_lab"} else None
 if settings.p3_backend == "isaac_lab":
-    training_runner = runtime_adapters["providers"].get("native_isaac_lab")
-sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_rl_lab", "unitree_mujoco"} else None
+    training_runner = runtime_adapters["providers"].get("isaac_lab")
+sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_mujoco"} else None
 training_providers = runtime_adapters["providers"] if settings.p3_backend != "fake_smoke" else {}
 sim2sim_adapters = runtime_adapters["sim2sim_adapters"] if settings.p3_backend != "fake_smoke" else {}
 training_service = TrainingService(run_service=run_service, robot_adapter=g1_adapter, robot_registry=robot_registry, task_registry=task_registry, training_providers=training_providers, sim2sim_adapters=sim2sim_adapters, training_provider_registry=runtime_adapters.get("training_provider_registry"), sim2sim_registry=runtime_adapters.get("sim2sim_registry"), workspace=settings.runtime_root / "runs", artifact_service=artifact_service, object_store=object_store, training_runner=training_runner, sim2sim_adapter=sim2sim_adapter, reward_config_store=reward_config_store)
@@ -90,8 +90,8 @@ motion_pipeline_service = MotionPipelineService(
     store=MotionPipelineStore(settings.runtime_root / "motion_pipelines"),
     task_dispatcher=p3_task_dispatcher,
     kinematics_compiler=runtime_adapters["compiler"],
-    gvhmr_runner=runtime_adapters["gvhmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
-    gmr_runner=runtime_adapters["gmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
+    gvhmr_runner=runtime_adapters["gvhmr"] if settings.p3_backend in {"isaac_lab", "gmr_gvhmr"} else None,
+    gmr_runner=runtime_adapters["gmr"] if settings.p3_backend in {"isaac_lab", "gmr_gvhmr"} else None,
     robot_registry=robot_registry,
     motion_editors=motion_editors,
     kinematics_compilers=runtime_adapters.get("kinematics_compilers", {}),

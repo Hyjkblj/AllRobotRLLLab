@@ -30,7 +30,6 @@ def load_runtime_versions(path: Path) -> RuntimeVersions | None:
             "isaac_lab_git": f"v2.3.0@{external.get('isaac_lab', {}).get('git_sha') or 'pending'}",
             "isaac_lab_package": packages.get("isaaclab") or "pending",
             "isaac_sim_package": os.getenv("ISAACSIM_VERSION", "5.1.0.0"),
-            "unitree_rl_lab_package": packages.get("unitree-rl-lab") or "0.2.1",
             "unitree_mujoco_git": external.get("unitree_mujoco", {}).get("git_sha") or (f"content:{external.get('unitree_mujoco', {}).get('source_sha256')}" if external.get("unitree_mujoco", {}).get("source_sha256") else "pending"),
             "gmr_git": external.get("gmr", {}).get("git_sha") or (f"content:{external.get('gmr', {}).get('source_sha256')}" if external.get("gmr", {}).get("source_sha256") else "pending"),
             "gvhmr_git": external.get("gvhmr", {}).get("git_sha") or (f"content:{external.get('gvhmr', {}).get('source_sha256')}" if external.get("gvhmr", {}).get("source_sha256") else "pending"),

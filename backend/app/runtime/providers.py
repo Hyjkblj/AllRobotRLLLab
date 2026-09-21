@@ -1,8 +1,4 @@
-"""Training provider boundary.
-
-Unitree RL Lab is intentionally an optional provider. The platform can select
-another provider for a task without changing application services.
-"""
+"""Training provider boundary owned by the platform."""
 
 from __future__ import annotations
 
@@ -28,22 +24,20 @@ class TrainingProvider(Protocol):
 
 
 class UnitreeRLLabProvider:
-    """G1 provider backed by the externally installed Unitree RL Lab."""
+    """Compatibility facade backed by the platform Isaac runner.
 
-    name = "unitree_rl_lab"
+    Existing integrations may still import this symbol; it no longer reads a
+    Unitree checkout and is not registered by the composition root.
+    """
+
+    name = "isaac_lab"
     supported_robot_ids = frozenset({"unitree_g1_29dof"})
-    # Platform IDs are stable API identifiers. Unitree RL Lab registers
-    # Gymnasium IDs, which are an upstream implementation detail.
-    task_id_map = {
-        "g1_mimic": "Unitree-G1-29dof-Mimic-Gangnanm-Style",
-    }
+    task_id_map = {"g1_mimic": "Unitree-G1-29dof-Mimic-Gangnanm-Style"}
 
     def __init__(self, runner: IsaacLabRunner) -> None:
         self.runner = runner
 
     def supports(self, *, robot_id: str, task_id: str) -> bool:
-        """Keep the vendor-specific provider from being used for another robot."""
-
         return robot_id in self.supported_robot_ids and task_id == "g1_mimic"
 
     @classmethod
@@ -51,7 +45,7 @@ class UnitreeRLLabProvider:
         try:
             return cls.task_id_map[task_id]
         except KeyError as exc:
-            raise RunnerError("UNITREE_TASK_UNSUPPORTED", f"Unitree RL Lab has no mapping for platform task {task_id}") from exc
+            raise RunnerError("ISAAC_TASK_UNSUPPORTED", f"platform task is not registered: {task_id}") from exc
 
     def train(self, **kwargs: Any) -> TrainingExecution:
         return self.runner.train(**{**kwargs, "task_id": self.upstream_task_id(str(kwargs["task_id"]))})
@@ -66,12 +60,11 @@ class UnitreeRLLabProvider:
 class NativeIsaacLabProvider:
     """Platform-owned Isaac Lab entrypoint contract.
 
-    A deployment must provide explicit command templates. The provider never
-    falls back to Unitree RL Lab, which makes the boundary auditable while the
-    native task implementation is developed in the selected Isaac runtime.
+    A deployment must provide explicit command templates. Task implementations
+    are selected by the platform task registry inside the Isaac environment.
     """
 
-    name = "native_isaac_lab"
+    name = "isaac_lab"
     version = "native-isaac-provider.v1"
 
     def supports(self, *, robot_id: str, task_id: str) -> bool:
@@ -157,4 +150,6 @@ class NativeIsaacLabProvider:
         return ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {path.name: path for path in outputs}, manifest)
 
 
-__all__ = ["NativeIsaacLabProvider", "TrainingProvider", "UnitreeRLLabProvider"]
+IsaacLabProvider = NativeIsaacLabProvider
+
+__all__ = ["NativeIsaacLabProvider", "IsaacLabProvider", "TrainingProvider", "UnitreeRLLabProvider"]

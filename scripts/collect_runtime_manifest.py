@@ -36,7 +36,6 @@ PINNED_PATHS = {
     "GMR_PATH": "gmr",
     "GVHMR_PATH": "gvhmr",
     "UNITREE_MUJOCO_PATH": "unitree_mujoco",
-    "UNITREE_RL_LAB_PATH": "unitree_rl_lab",
 }
 
 
@@ -94,9 +93,8 @@ def _asset_identity(root: Path) -> dict[str, Any]:
     candidates = {
         "mujoco_xml": os.getenv("G1_MJCF_PATH", str(default_gmr / "assets" / "unitree_g1" / "g1_mocap_29dof.xml")),
         "urdf": os.getenv("G1_URDF_PATH", str(default_gmr / "assets" / "unitree_g1" / "g1_custom_collision_29dof.urdf")),
-        # Unitree RL Lab's G1 29 DoF mimic task imports this URDF and lets
-        # Isaac Lab generate the runtime USD representation. Keep it separate
-        # from the GMR URDF used by the motion/contract adapter.
+        # The platform Isaac task imports this URDF and generates the runtime
+        # USD representation. Keep it separate from the GMR contract asset.
         "isaac_urdf": os.getenv("G1_ISAAC_URDF_PATH", ""),
         "isaac_usd": os.getenv("G1_USD_PATH", ""),
     }
@@ -174,7 +172,7 @@ def collect(root: Path, *, profile: str | None = None) -> dict[str, Any]:
             "source_sha256": _source_hash(path) if path.is_dir() else None,
         }
     packages: dict[str, str | None] = {}
-    for package in ("torch", "isaaclab", "unitree-rl-lab", "mujoco", "celery", "fastapi"):
+    for package in ("torch", "isaaclab", "mujoco", "celery", "fastapi"):
         try:
             packages[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:

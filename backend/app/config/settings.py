@@ -57,7 +57,6 @@ class Settings:
         self.gvhmr_path = os.getenv("GVHMR_PATH", "").strip() or registered_path("gvhmr")
         self.isaac_lab_path = os.getenv("ISAACLAB_PATH", "").strip() or registered_path("isaac_lab")
         self.isaac_sim_path = os.getenv("ISAACSIM_PATH", "").strip() or registered_path("isaac_sim")
-        self.unitree_rl_lab_path = os.getenv("UNITREE_RL_LAB_PATH", "").strip() or registered_path("unitree_rl_lab")
         self.unitree_mujoco_path = os.getenv("UNITREE_MUJOCO_PATH", "").strip() or registered_path("unitree_mujoco")
         self.gmr_python = os.getenv("GMR_PYTHON", "").strip() or registered_python("gmr")
         self.gvhmr_python = os.getenv("GVHMR_PYTHON", "").strip() or registered_python("gvhmr")
@@ -105,7 +104,7 @@ class Settings:
         elif placeholder(self.worker_auth_token):
             errors.append("WORKER_AUTH_TOKEN still contains a development placeholder")
         if self.p3_backend == "fake_smoke":
-            errors.append("P3_BACKEND must select a real Isaac/Unitree backend in staging/production; fake_smoke is development-only")
+            errors.append("P3_BACKEND must select a real Isaac backend in staging/production; fake_smoke is development-only")
         # A worker that advertises a real backend must be able to construct
         # every command used by that backend before it starts consuming queue
         # messages.  API-only processes intentionally skip this check so they
@@ -125,7 +124,6 @@ class Settings:
                 "gvhmr": self.gvhmr_path,
                 "isaac_lab": self.isaac_lab_path,
                 "isaac_sim": self.isaac_sim_path,
-                "unitree_rl_lab": self.unitree_rl_lab_path,
                 "unitree_mujoco": self.unitree_mujoco_path,
             }
             for runtime in runtime_names(self.runtime_profile):

@@ -66,7 +66,7 @@
   "gmr_mapping_version": "gmr_g1.v1",
   "isaac_task_ids": ["g1_mimic"],
   "default_scene_id": "g1_flat",
-  "training_provider": "unitree_rl_lab",
+  "training_provider": "isaac_lab",
   "sim2sim_adapter": "unitree_g1_mujoco",
   "license": {"status": "research_only", "source": "Unitree/GMR assets"}
 }

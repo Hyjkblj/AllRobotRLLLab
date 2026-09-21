@@ -21,7 +21,7 @@ from .mujoco_kinematics import MuJoCoKinematicsCompiler
 from .unitree_sim2sim_runner import UnitreeMuJoCoRunner
 from .mujoco_runner import MuJoCoRunner
 from .mujoco_config import MuJoCoModelConfig, resolve_mujoco_model_config
-from .providers import NativeIsaacLabProvider, TrainingProvider, UnitreeRLLabProvider
+from .providers import NativeIsaacLabProvider, IsaacLabProvider, TrainingProvider
 from .process import external_run_context, terminate_run_process
 
 __all__ = [
@@ -43,7 +43,7 @@ __all__ = [
     "resolve_mujoco_model_config",
     "NativeIsaacLabProvider",
     "TrainingProvider",
-    "UnitreeRLLabProvider",
+    "IsaacLabProvider",
     "external_run_context",
     "terminate_run_process",
 ]

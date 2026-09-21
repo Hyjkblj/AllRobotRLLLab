@@ -60,10 +60,10 @@ def create_celery_app():
     adapter = assembly.default_adapter
     task_registry = assembly.task_registry
     runtime_adapters = assembly.runtime_adapters
-    training_runner = runtime_adapters["providers"].get(settings.p3_backend) if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_rl_lab"} else None
+    training_runner = runtime_adapters["providers"].get(settings.p3_backend) if settings.p3_backend in {"native_isaac_lab", "isaac_lab"} else None
     if settings.p3_backend == "isaac_lab":
-        training_runner = runtime_adapters["providers"].get("native_isaac_lab")
-    sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_rl_lab", "unitree_mujoco"} else None
+        training_runner = runtime_adapters["providers"].get("isaac_lab")
+    sim2sim_adapter = runtime_adapters["sim2sim"] if settings.p3_backend in {"native_isaac_lab", "isaac_lab", "unitree_mujoco"} else None
     training_providers = runtime_adapters["providers"] if settings.p3_backend != "fake_smoke" else {}
     sim2sim_adapters = runtime_adapters["sim2sim_adapters"] if settings.p3_backend != "fake_smoke" else {}
     reward_config_store = RewardConfigVersionStore(RewardRegistry(), storage_path=settings.runtime_root / "reward_configs.json")
@@ -80,8 +80,8 @@ def create_celery_app():
         asset_service=AssetService(uow, object_store),
         store=MotionPipelineStore(settings.runtime_root / "motion_pipelines"),
         kinematics_compiler=runtime_adapters["compiler"],
-        gvhmr_runner=runtime_adapters["gvhmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
-        gmr_runner=runtime_adapters["gmr"] if settings.p3_backend in {"isaac_lab", "unitree_rl_lab", "gmr_gvhmr"} else None,
+        gvhmr_runner=runtime_adapters["gvhmr"] if settings.p3_backend in {"isaac_lab", "gmr_gvhmr"} else None,
+        gmr_runner=runtime_adapters["gmr"] if settings.p3_backend in {"isaac_lab", "gmr_gvhmr"} else None,
         robot_registry=robot_registry,
         motion_editors=assembly.motion_editors,
         kinematics_compilers=runtime_adapters.get("kinematics_compilers", {}),

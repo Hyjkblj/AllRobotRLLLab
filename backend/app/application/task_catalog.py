@@ -66,7 +66,7 @@ def default_task_registry(robot_registry=None, *, legacy_g1: bool = False) -> Ta
                     task_id="g1_mimic",
                     robot_id="unitree_g1_29dof",
                     scene_id="g1_flat",
-                    training_provider="unitree_rl_lab",
+                    training_provider="isaac_lab",
                     sim2sim_adapter="unitree_g1_mujoco",
                     capabilities=("mimic",),
                 )
@@ -77,7 +77,7 @@ def default_task_registry(robot_registry=None, *, legacy_g1: bool = False) -> Ta
         spec = adapter.get_spec()
         for task_id in spec.isaac_task_ids:
             scene_id = spec.default_scene_id or f"{task_id}_scene"
-            provider = spec.training_provider or "native_isaac_lab"
+            provider = spec.training_provider or "isaac_lab"
             tasks.append(
                 TaskSpec(
                     task_id=task_id,

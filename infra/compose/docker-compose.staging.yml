@@ -209,7 +209,6 @@ services:
       GMR_PATH: /opt/GMR
       GVHMR_PATH: /opt/GVHMR
       UNITREE_MUJOCO_PATH: /opt/unitree_mujoco
-      UNITREE_RL_LAB_PATH: /opt/unitree_rl_lab
       G1_MJCF_PATH: /opt/GMR/assets/unitree_g1/g1_mocap_29dof.xml
       H1_MJCF_PATH: /opt/H1/h1.xml
       H1_SIM2SIM_COMMAND: ${H1_SIM2SIM_COMMAND:-}
@@ -223,7 +222,6 @@ services:
       - ${GMR_PATH:-/opt/GMR}:/opt/GMR:ro
       - ${GVHMR_PATH:-/opt/GVHMR}:/opt/GVHMR:ro
       - ${UNITREE_MUJOCO_PATH:-/opt/unitree_mujoco}:/opt/unitree_mujoco:ro
-      - ${UNITREE_RL_LAB_PATH:-/opt/unitree_rl_lab}:/opt/unitree_rl_lab:ro
       - ${H1_ASSET_PATH:-/opt/H1}:/opt/H1:ro
     gpus: all
     command: ["celery", "-A", "backend.app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "-Q", "isaac-gpu,sim2sim-gpu,motion-gpu", "--concurrency=1"]

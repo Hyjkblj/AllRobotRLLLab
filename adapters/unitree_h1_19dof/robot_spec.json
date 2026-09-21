@@ -53,7 +53,7 @@
   "gmr_mapping_version": "gmr_h1.v1",
   "isaac_task_ids": ["h1_mimic"],
   "default_scene_id": "h1_flat",
-  "training_provider": "native_isaac_lab",
+  "training_provider": "isaac_lab",
   "sim2sim_adapter": "mujoco_h1",
   "license": {"status": "research_only", "source": "MuJoCo Menagerie / Unitree H1"}
 }
