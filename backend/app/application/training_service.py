@@ -12,6 +12,7 @@ from backend.app.application.policy_exporter import ExportError, ExportResult, T
 from backend.app.application.run_service import RunService, RunServiceError, utc_now
 from backend.app.application.sim2sim_service import FakeSim2SimAdapter, build_sim2sim_report
 from backend.app.application.training_validator import validate_training_config
+from backend.app.application.train_motion_validator import TrainMotionFileError, validate_train_motion_file
 from backend.app.application.robot_catalog import RobotAdapterRegistry, RobotRegistryError
 from backend.app.application.task_catalog import TaskRegistry, TaskRegistryError, default_task_registry
 from backend.app.application.provider_catalog import Sim2SimRegistry, TrainingProviderRegistry
@@ -195,6 +196,15 @@ class TrainingService:
         output_dir = self.workspace / run_id / attempt.attempt_id
         try:
             motion_path = self._materialize_asset(config.motion_asset_version_id, output_dir / "input" / "train_motion.npz")
+            manifest_motion_hash = str((run.manifest.motion or {}).get("train_motion_sha256", "")).strip()
+            with self.run_service.uow:
+                materialized_version = self.run_service.uow.assets.version(config.motion_asset_version_id)
+            if materialized_version is not None and materialized_version.sha256 and materialized_version.sha256 != manifest_motion_hash:
+                raise TrainingServiceError("TRAIN_MOTION_HASH_MISMATCH", "asset hash does not match the frozen Run Manifest", status_code=409)
+            try:
+                validate_train_motion_file(motion_path, selected_adapter.get_spec(), expected_sha256=manifest_motion_hash)
+            except TrainMotionFileError as exc:
+                raise TrainingServiceError("TRAIN_MOTION_CONTRACT_INVALID", str(exc), status_code=409) from exc
             provider_config = config.model_dump(mode="json")
             reward_config = self.reward_configs.get(run_id)
             if reward_config is not None:

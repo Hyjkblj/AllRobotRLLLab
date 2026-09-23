@@ -50,6 +50,7 @@ def test_direct_g1_motion_pipeline_publishes_train_motion(tmp_path):
             "body_quat_w",
             "body_lin_vel_w",
             "body_ang_vel_w",
+            "format_version",
             "fps",
             "joint_names",
             "body_names",
@@ -59,6 +60,7 @@ def test_direct_g1_motion_pipeline_publishes_train_motion(tmp_path):
             "source_motion_hash",
             "compiler_version",
         } <= set(archive.files)
+        assert str(np.asarray(archive["format_version"]).reshape(-1)[0]) == "train_motion_npz.v1"
         assert str(np.asarray(archive["robot_id"]).reshape(-1)[0]) == "unitree_g1_29dof"
         assert len(str(np.asarray(archive["source_motion_hash"]).reshape(-1)[0])) == 64
 

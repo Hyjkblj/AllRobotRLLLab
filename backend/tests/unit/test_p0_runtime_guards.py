@@ -1,5 +1,4 @@
 import re
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -14,10 +13,7 @@ from backend.app.api import routes
 from backend.app.config.settings import settings
 from backend.app.domain.contracts import TrainingConfig
 from backend.app.domain.motion import MotionArrays
-from backend.app.runtime.contracts import ExternalRunResult
-from backend.app.runtime.isaac_runner import IsaacLabRunner
 from backend.app.runtime.profiles import runtime_names
-from backend.app.runtime.registry import RuntimeRegistry
 
 
 def _service_block(document: str, service: str) -> str:
@@ -103,10 +99,13 @@ def test_staging_compose_shares_runtime_root_across_processes() -> None:
         assert "staging-runtime:/app/.runtime" in _service_block(document, service), service
 
 
-def test_staging_compose_requires_unitree_rl_lab_for_gpu_worker() -> None:
+def test_staging_compose_uses_native_isaac_commands_without_unitree_runtime() -> None:
     document = Path("infra/compose/docker-compose.staging.yml").read_text(encoding="utf-8")
     worker = _service_block(document, "worker-gpu")
-    assert "UNITREE_RL_LAB_PATH: /opt/unitree_rl_lab" in worker
+    assert "NATIVE_ISAAC_TRAIN_COMMAND:" in worker
+    assert "NATIVE_ISAAC_EXPORT_COMMAND:" in worker
+    assert "NATIVE_ISAAC_PLAY_COMMAND:" in worker
+    assert "UNITREE_RL_LAB_PATH" not in worker
 
 
 def test_deployed_motion_profile_requires_the_g1_mjcf(monkeypatch) -> None:
@@ -171,36 +170,8 @@ def test_deployed_motion_compile_refuses_approximation(tmp_path: Path) -> None:
         settings.app_env = original
 
 
-def test_isaac_runner_uses_registered_unitree_rl_lab_path(tmp_path: Path, monkeypatch) -> None:
-    isaac_lab = tmp_path / "IsaacLab"
-    isaac_sim = tmp_path / "IsaacSim"
-    unitree_rl_lab = tmp_path / "unitree_rl_lab"
-    for path in (isaac_lab, isaac_sim, unitree_rl_lab):
-        path.mkdir()
-    (unitree_rl_lab / "scripts" / "rsl_rl").mkdir(parents=True)
-    registration = tmp_path / "runtime-registrations.json"
-    registry = RuntimeRegistry(registration_path=registration)
-    for name, path in (("isaac_lab", isaac_lab), ("isaac_sim", isaac_sim), ("unitree_rl_lab", unitree_rl_lab)):
-        assert registry.register(name, path=path, python=sys.executable).available
-
-    captured: dict[str, tuple[str, ...]] = {}
-
-    def fake_run_external(*, stage, workspace, command, timeout_seconds, env):
-        captured["command"] = tuple(command)
-        (workspace / "manifest").mkdir(parents=True, exist_ok=True)
-        checkpoint = workspace / "checkpoint.pt"
-        checkpoint.write_bytes(b"checkpoint")
-        return ExternalRunResult(stage, tuple(command), 0, "", "", workspace, {"checkpoint": checkpoint})
-
-    monkeypatch.setattr("backend.app.runtime.isaac_runner.run_external", fake_run_external)
-    runner = IsaacLabRunner(registry=registry, workspace=tmp_path / "workspace")
-    runner.train(run_id="run-1", task_id="g1_mimic", motion_path=tmp_path / "motion.npz", config={})
-
-    assert captured["command"][0] == sys.executable
-    assert str(unitree_rl_lab / "scripts" / "rsl_rl" / "train.py") in captured["command"]
-
-
 def test_runtime_profiles_define_operation_requirements() -> None:
     assert runtime_names("api") == ()
     assert runtime_names("motion-gpu") == ("gmr", "gvhmr")
-    assert set(runtime_names("gpu")) == {"gmr", "gvhmr", "isaac_lab", "isaac_sim", "unitree_rl_lab", "unitree_mujoco"}
+    assert set(runtime_names("gpu")) == {"gmr", "gvhmr", "isaac_lab", "isaac_sim", "unitree_mujoco"}
+    assert "unitree_rl_lab" not in runtime_names("gpu")
