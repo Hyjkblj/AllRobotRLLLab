@@ -23,6 +23,8 @@ class IsaacTaskEntrypoint(Protocol):
 
 
 _TASKS: dict[str, IsaacTaskEntrypoint] = {}
+_BUILTIN_TASK_MODULES = ("apps.isaac_tasks.g1_mimic", "apps.isaac_tasks.h1_mimic")
+_LOADED_TASK_MODULES: set[str] = set()
 
 
 def register_task(task_id: str, implementation: IsaacTaskEntrypoint) -> None:
@@ -46,14 +48,22 @@ def load_task_modules(module_names: list[str] | tuple[str, ...] | None = None) -
     passed this module's ``register_task`` function; no Isaac package is
     imported while the platform API is starting.
     """
-    raw = module_names if module_names is not None else tuple(item.strip() for item in os.getenv("ISAAC_TASK_MODULES", "").split(",") if item.strip())
+    if module_names is not None:
+        raw = module_names
+    else:
+        configured = tuple(item.strip() for item in os.getenv("ISAAC_TASK_MODULES", "").split(",") if item.strip())
+        raw = configured or _BUILTIN_TASK_MODULES
     loaded: list[str] = []
     for name in raw:
+        if name in _LOADED_TASK_MODULES:
+            loaded.append(name)
+            continue
         module = importlib.import_module(name)
         register_tasks = getattr(module, "register_tasks", None)
         if not callable(register_tasks):
             raise TypeError(f"Isaac task module must expose register_tasks: {name}")
         register_tasks(register_task)
+        _LOADED_TASK_MODULES.add(name)
         loaded.append(name)
     return tuple(loaded)
 

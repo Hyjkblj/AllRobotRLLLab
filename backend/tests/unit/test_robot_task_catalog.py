@@ -16,8 +16,7 @@ from adapters.unitree_h1_19dof import UnitreeH1Adapter
 from backend.app.application.run_service import RunService
 from backend.app.application.sim2sim_service import FakeSim2SimAdapter
 from backend.app.application.training_service import TrainingService
-from backend.app.runtime.isaac_runner import IsaacLabRunner
-from backend.app.runtime.providers import UnitreeRLLabProvider
+from backend.app.runtime.providers import NativeIsaacLabProvider
 from backend.app.application.training_service import TrainingServiceError
 from backend.app.domain.state_machine import RunStatus
 from backend.app.infrastructure.memory import InMemoryUnitOfWork
@@ -134,7 +133,7 @@ def test_training_service_rejects_g1_provider_for_h1_run(tmp_path: Path) -> None
         reward_config_sha256="b" * 64,
         training_config_sha256="c" * 64,
     )
-    provider = UnitreeRLLabProvider(IsaacLabRunner.__new__(IsaacLabRunner))
+    provider = NativeIsaacLabProvider.__new__(NativeIsaacLabProvider)
     service = TrainingService(
         run_service=runs,
         robot_adapter=adapter,

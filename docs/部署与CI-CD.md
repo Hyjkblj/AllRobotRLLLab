@@ -133,11 +133,11 @@ python scripts/probe_isaacsim.py --frames 5 --output .runtime/isaacsim-probe.jso
 显示环境下干扰启动证据。若输出 `startup`、`update` 均为 `passed`，即可
 继续验证 Isaac Lab task；优雅关闭用 `--close` 单独执行并单独记录结果。
 
-当前仓库的 Celery task 已建立稳定任务名、幂等键、late acknowledgement、worker lost 重投和 durable P3 state；真实 Isaac/RSL-RL runner、Unitree MuJoCo adapter 和 GPU lease 仍需在服务器阶段接入。没有 GPU 运行证据时，不能把 Run 标记为 `READY_TO_DOWNLOAD`。
+当前仓库的 Celery task 已建立稳定任务名、幂等键、late acknowledgement、worker lost 重投和 durable P3 state；项目自有 G1 Isaac/RSL-RL task 与 Unitree MuJoCo adapter 已进入代码路径，仍需在服务器完成真实 GPU 训练、导出与三 seed sim2sim 验收。没有这些运行证据时，不能把 Run 标记为 `READY_TO_DOWNLOAD`。
 
 生产内部写接口要求同时提供 `X-Worker-Id` 和 `X-Worker-Token`。`WORKER_AUTH_TOKEN` 由服务器 Secret 管理器注入，长度至少 32 个字符；staging/production 缺失该变量时 API 会拒绝启动。
 
-当前 Unitree RL Lab 的 G1 29 DoF mimic 任务使用
+项目自有的 G1 29 DoF mimic 任务使用
 `G1_ISAAC_URDF_PATH` 指向 Unitree ROS 的 URDF，并由 Isaac Lab 在运行时转换
 为 USD；因此该任务不需要本地 `G1_USD_PATH`。只有使用
 `UnitreeUsdFileCfg` 的任务才需要配置本地或可访问的 USD 资产。
@@ -151,10 +151,11 @@ export H1_MJCF_PATH=/opt/assets/unitree_h1/h1.xml
 export H1_SIM2SIM_COMMAND='python /opt/h1_sim/evaluate.py --seed {seed} --policy {policy} --output {output}'
 ```
 
-G1 的 `unitree_rl_lab` provider 仅接受 `unitree_g1_29dof/g1_mimic`；H1 的
-`unitree_h1_19dof/h1_mimic` 应配置 `P3_BACKEND=isaac_lab` 与
-`NATIVE_ISAAC_TRAIN_COMMAND`、`NATIVE_ISAAC_EXPORT_COMMAND`。provider 和
-sim2sim adapter 均按 Run Manifest 选择，不要为 H1 复用 G1 的命令或模型。
+原生 `isaac_lab` provider 默认只启用已内置实现的
+`unitree_g1_29dof/g1_mimic`。H1 在没有项目侧 task 实现时会 fail closed；完成
+H1 实现后，使用 `NATIVE_ISAAC_SUPPORTED_TASKS=unitree_h1_19dof:h1_mimic`
+显式登记，并通过 `ISAAC_TASK_MODULES` 加载对应模块。provider 和 sim2sim
+adapter 均按 Run Manifest 选择，不要为 H1 复用 G1 的命令或模型。
 
 ## 6. 发布和回滚
 

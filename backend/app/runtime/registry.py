@@ -127,12 +127,30 @@ class RuntimeRegistry:
         return RuntimeCheck(spec.name, True, not errors, path=str(path), revision=revision, expected_revision=expected_revision, python=python, errors=tuple(errors))
 
     def doctor(self, *, required_only: bool = False, profile: str | None = None) -> dict[str, Any]:
+        selected_names: set[str] | None = None
         if profile is not None:
             selected_names = set(runtime_names(profile))
             checks = [self.check(spec) for spec in self.SPECS if spec.name in selected_names]
         else:
             checks = [self.check(spec) for spec in self.SPECS if not required_only or spec.required]
         failures = [check.as_dict() for check in checks if not check.available]
+        enabled_adapters = {
+            item.strip()
+            for item in os.getenv("ROBOT_ADAPTER_MODULES", "adapters.unitree_g1_29dof").split(",")
+            if item.strip()
+        }
+        if selected_names and "isaac_lab" in selected_names and "adapters.unitree_g1_29dof" in enabled_adapters:
+            raw_urdf = os.getenv("G1_ISAAC_URDF_PATH", "").strip()
+            urdf = Path(raw_urdf).expanduser().resolve() if raw_urdf else None
+            if urdf is None or not urdf.is_file():
+                failures.append(
+                    {
+                        "name": "g1_isaac_urdf",
+                        "status": "NOT_READY",
+                        "path": str(urdf) if urdf else None,
+                        "errors": ["G1_ISAAC_URDF_PATH must point to the G1 29 DoF training URDF"],
+                    }
+                )
         manifest = None
         if self.manifest_path and self.manifest_path.is_file():
             try:

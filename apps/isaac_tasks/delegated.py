@@ -17,9 +17,10 @@ class TaskImplementationError(RuntimeError):
 class DelegatedIsaacTask:
     task_id: str
     implementation_env: str
+    default_module: str | None = None
 
     def _implementation(self) -> Any:
-        target = os.getenv(self.implementation_env, "").strip()
+        target = os.getenv(self.implementation_env, "").strip() or (self.default_module or "")
         if not target:
             raise TaskImplementationError(f"{self.implementation_env} must point to the Isaac task implementation module")
         module = importlib.import_module(target)

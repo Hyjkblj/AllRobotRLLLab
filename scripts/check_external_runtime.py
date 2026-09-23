@@ -116,6 +116,23 @@ def main() -> int:
             failures.append(f"{variable} revision mismatch: expected {expected}, got {revision}")
         results[variable] = {"label": label, "configured": True, "path": str(path), "revision": revision, "expected": expected}
 
+    enabled_adapters = {
+        item.strip() for item in os.getenv("ROBOT_ADAPTER_MODULES", "adapters.unitree_g1_29dof").split(",") if item.strip()
+    }
+    if "isaac_lab" in required_names and "adapters.unitree_g1_29dof" in enabled_adapters:
+        variable = "G1_ISAAC_URDF_PATH"
+        raw = os.getenv(variable, "").strip()
+        path = Path(raw).expanduser().resolve() if raw else None
+        available = bool(path and path.is_file())
+        if not available:
+            failures.append(f"{variable} must point to the registered G1 29 DoF training URDF")
+        results[variable] = {
+            "label": "g1_isaac_urdf",
+            "configured": bool(raw),
+            "path": str(path) if path else None,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest() if available and path else None,
+        }
+
     if args.json:
         print(json.dumps({"status": "ok" if not failures else "failed", "profile": profile, "checks": results, "failures": failures}, ensure_ascii=False, indent=2))
     else:

@@ -104,7 +104,7 @@ P3 训练、TorchScript/ONNX 导出、三种子 sim2sim、策略包校验和产�
 
 仓库的 PR 质量门见 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)，包含 Python/数据库测试、仓库边界检查、Compose 校验和 React 构建。平台服务镜像由 [`infra/docker/platform.Dockerfile`](infra/docker/platform.Dockerfile) 构建；staging 编排见 [`infra/compose/docker-compose.staging.yml`](infra/compose/docker-compose.staging.yml)。
 
-标准部署、服务器初始化、GPU Worker、发布和回滚流程见 [docs/部署与CI-CD.md](docs/部署与CI-CD.md)。CI 不下载或提交第三方仓库；真实 Isaac/GMR/GVHMR/Unitree 运行时必须在 GPU 服务器按本 README 的版本锁定清单安装。
+标准部署、服务器初始化、GPU Worker、发布和回滚流程见 [docs/部署与CI-CD.md](docs/部署与CI-CD.md)。CI 不下载或提交第三方仓库；真实 Isaac/GMR/GVHMR/MuJoCo 运行时必须在 GPU 服务器按本 README 的版本锁定清单安装。
 
 ## 第三方依赖
 
@@ -117,7 +117,6 @@ P3 训练、TorchScript/ONNX 导出、三种子 sim2sim、策略包校验和产�
 | Mink | 由 GMR lockfile/环境锁定 | `third_party/mink-main` | 在 GMR Python 环境按其 lockfile 安装，不与 Isaac 环境混装 |
 | Isaac Lab | tag `v2.3.0`, commit `3c6e67bb5`; Python package `0.47.2` | `third_party/IsaacLab-2.3.0` 或外部 `ISAACLAB_PATH` | `git clone https://github.com/isaac-sim/IsaacLab.git third_party/IsaacLab-2.3.0; git -C third_party/IsaacLab-2.3.0 checkout v2.3.0; ./isaaclab.sh --install` |
 | Isaac Sim | package `5.1.0.0` | 外部 `ISAACSIM_PATH` | 通过 NVIDIA Omniverse/Isaac Sim 官方安装器安装；需要接受其许可证，不从本仓库下载 |
-| Unitree RL Lab | package `0.2.1` | `third_party/unitree_rl_lab-main` 或外部路径 | `git clone https://github.com/unitreerobotics/unitree_rl_lab.git third_party/unitree_rl_lab-main; cd third_party/unitree_rl_lab-main; python -m pip install -e .`；生产环境还需记录实际 Git SHA |
 | Unitree MuJoCo | upstream commit `ae6a840` | `third_party/unitree_mujoco-main` 或外部路径 | `git clone https://github.com/unitreerobotics/unitree_mujoco.git third_party/unitree_mujoco-main; git -C third_party/unitree_mujoco-main checkout ae6a840` |
 | MuJoCo Python | `3.12.0` Windows wheel；Unitree C++ baseline `3.3.6` | Conda 环境 | `python -m pip install -r frontend-prototype/requirements-mujoco.txt` |
 | MuJoCo Menagerie | 按使用的机器人 commit 锁定 | `third_party/mujoco_menagerie-main` | `git clone https://github.com/google-deepmind/mujoco_menagerie.git third_party/mujoco_menagerie-main`，使用前记录 commit |
@@ -149,20 +148,28 @@ export ISAACSIM_PATH=/opt/isaac-sim
 export GMR_PATH=$PWD/third_party/GMR-master
 export GVHMR_PATH=$PWD/third_party/GVHMR-main
 export UNITREE_MUJOCO_PATH=$PWD/third_party/unitree_mujoco-main
-export UNITREE_RL_LAB_PATH=$PWD/third_party/unitree_rl_lab-main
 export G1_MJCF_PATH=$GMR_PATH/assets/unitree_g1/g1_mocap_29dof.xml
 export G1_ISAAC_URDF_PATH=/opt/unitree_ros/robots/g1_description/g1_29dof_rev_1_0.urdf
 python scripts/check_external_runtime.py --profile gpu --json
 python scripts/collect_runtime_manifest.py --profile gpu --output .runtime/runtime-manifest.json
 ```
 
-训练 provider 通过 `P3_BACKEND` 选择。`P3_BACKEND=unitree_rl_lab` 仅启用 G1 的外部 Unitree provider；`P3_BACKEND=isaac_lab` 选择平台的 `NativeIsaacLabProvider`，必须显式配置平台任务入口命令（训练模板可使用 `{run_id}`、`{task}`、`{motion}`、`{output}`、`{config}`、`{manifest}`；导出/回放模板可使用 `{checkpoint}`）：
+训练 provider 通过 `P3_BACKEND` 选择。`P3_BACKEND=isaac_lab` 使用平台的
+`NativeIsaacLabProvider` 和项目自带的 G1 `DirectRLEnv`/RSL-RL 实现，
+不依赖 Unitree RL Lab。默认命令会调用 `apps.isaac_tasks.entrypoint`；只有
+部署需要使用独立 Python/容器入口时才覆盖 `NATIVE_ISAAC_*_COMMAND`：
 
 ```bash
 export P3_BACKEND=isaac_lab
-export NATIVE_ISAAC_TRAIN_COMMAND="$ISAAC_PYTHON -m apps.isaac_tasks.entrypoint train --task {task} --manifest {manifest} --output {output}"
-export NATIVE_ISAAC_EXPORT_COMMAND="$ISAAC_PYTHON -m apps.isaac_tasks.entrypoint export --task {task} --checkpoint {checkpoint} --output {output}"
+# 可选覆盖；变量值必须是参数数组语义，不能依赖 shell 二次展开：
+export NATIVE_ISAAC_TRAIN_COMMAND="/absolute/isaac/python -m apps.isaac_tasks.entrypoint train --task {task} --manifest {manifest} --output {output}"
+export NATIVE_ISAAC_EXPORT_COMMAND="/absolute/isaac/python -m apps.isaac_tasks.entrypoint export --task {task} --checkpoint {checkpoint} --output {output}"
+export NATIVE_ISAAC_PLAY_COMMAND="/absolute/isaac/python -m apps.isaac_tasks.entrypoint play --task {task} --checkpoint {checkpoint} --output {output}"
 ```
+
+G1 默认注册 `apps.isaac_tasks.g1_native`，不需要设置
+`G1_ISAAC_TASK_MODULE`。该变量只作为显式替换扩展点保留。真实训练仍必须
+提供 `G1_ISAAC_URDF_PATH` 和经过平台动作流水线生成的 `TrainMotionNPZ`。
 
 机器人、任务和 provider 的扩展边界见 [docs/多机器人架构实施状态.md](docs/多机器人架构实施状态.md)。
 
@@ -190,7 +197,7 @@ python scripts/probe_isaacsim.py --frames 5 --close
 
 Windows 本地 MuJoCo 原型只需要 G1 MJCF/URDF 和网格位于 `third_party/GMR-master/assets/unitree_g1`；生产部署应将这些上游资产作为镜像或外部只读 volume 挂载。版本、许可证和 SHA-256 必须写入 Run Manifest，不能用未锁定的 `main` 分支替代。
 
-Unitree RL Lab 的 G1 29 DoF mimic 配置使用 Unitree ROS 的
+项目自有的 G1 29 DoF mimic 任务使用 Unitree ROS 的
 `g1_29dof_rev_1_0.urdf`（通过 Isaac Lab URDF importer 在运行时生成
 USD），因此不要求预先提供本地 `G1_USD_PATH`。设置
 `G1_ISAAC_URDF_PATH` 后，runtime manifest 会单独记录该训练 URDF 的路径、

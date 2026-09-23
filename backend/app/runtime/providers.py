@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -23,40 +25,6 @@ class TrainingProvider(Protocol):
     def play(self, *, checkpoint_path: Path, task_id: str, output_dir: Path | None = None) -> ExternalRunResult: ...
 
 
-class UnitreeRLLabProvider:
-    """Compatibility facade backed by the platform Isaac runner.
-
-    Existing integrations may still import this symbol; it no longer reads a
-    Unitree checkout and is not registered by the composition root.
-    """
-
-    name = "isaac_lab"
-    supported_robot_ids = frozenset({"unitree_g1_29dof"})
-    task_id_map = {"g1_mimic": "Unitree-G1-29dof-Mimic-Gangnanm-Style"}
-
-    def __init__(self, runner: IsaacLabRunner) -> None:
-        self.runner = runner
-
-    def supports(self, *, robot_id: str, task_id: str) -> bool:
-        return robot_id in self.supported_robot_ids and task_id == "g1_mimic"
-
-    @classmethod
-    def upstream_task_id(cls, task_id: str) -> str:
-        try:
-            return cls.task_id_map[task_id]
-        except KeyError as exc:
-            raise RunnerError("ISAAC_TASK_UNSUPPORTED", f"platform task is not registered: {task_id}") from exc
-
-    def train(self, **kwargs: Any) -> TrainingExecution:
-        return self.runner.train(**{**kwargs, "task_id": self.upstream_task_id(str(kwargs["task_id"]))})
-
-    def export(self, **kwargs: Any) -> ExternalRunResult:
-        return self.runner.export(**{**kwargs, "task_id": self.upstream_task_id(str(kwargs["task_id"]))})
-
-    def play(self, **kwargs: Any) -> ExternalRunResult:
-        return self.runner.play(**{**kwargs, "task_id": self.upstream_task_id(str(kwargs["task_id"]))})
-
-
 class NativeIsaacLabProvider:
     """Platform-owned Isaac Lab entrypoint contract.
 
@@ -66,11 +34,21 @@ class NativeIsaacLabProvider:
 
     name = "isaac_lab"
     version = "native-isaac-provider.v1"
+    builtin_tasks = frozenset({("unitree_g1_29dof", "g1_mimic")})
 
     def supports(self, *, robot_id: str, task_id: str) -> bool:
-        """Native tasks are resolved by the selected Isaac task registry."""
+        """Fail closed unless a native task implementation is registered.
 
-        return bool(robot_id.strip() and task_id.strip())
+        Deployments can extend the built-in catalog with comma-separated
+        ``robot_id:task_id`` pairs in ``NATIVE_ISAAC_SUPPORTED_TASKS``.
+        """
+
+        configured = {
+            tuple(part.strip() for part in item.split(":", 1))
+            for item in os.getenv("NATIVE_ISAAC_SUPPORTED_TASKS", "").split(",")
+            if ":" in item and all(part.strip() for part in item.split(":", 1))
+        }
+        return (robot_id.strip(), task_id.strip()) in self.builtin_tasks | configured
 
     def __init__(self, *, registry: RuntimeRegistry, workspace: Path, timeout_seconds: float = 24 * 3600) -> None:
         self.registry = registry
@@ -79,6 +57,13 @@ class NativeIsaacLabProvider:
 
     def _checks(self):
         return self.registry.require("isaac_lab"), self.registry.require("isaac_sim")
+
+    @staticmethod
+    def _process_env(**values: str) -> dict[str, str]:
+        repository_root = str(Path(__file__).resolve().parents[3])
+        inherited = os.getenv("PYTHONPATH", "").strip()
+        python_path = repository_root if not inherited else repository_root + os.pathsep + inherited
+        return {**values, "PYTHONPATH": python_path}
 
     @staticmethod
     def _require_command(env_name: str, *, default: list[str] | None = None) -> tuple[str, ...]:
@@ -92,7 +77,22 @@ class NativeIsaacLabProvider:
         target = Path(output_dir or self.workspace / run_id / "train").resolve()
         target.mkdir(parents=True, exist_ok=True)
         config_path = target / "training_config.json"
-        command_template = self._require_command("NATIVE_ISAAC_TRAIN_COMMAND")
+        isaac_python = isaac_lab.python or sys.executable
+        command_template = self._require_command(
+            "NATIVE_ISAAC_TRAIN_COMMAND",
+            default=[
+                isaac_python,
+                "-m",
+                "apps.isaac_tasks.entrypoint",
+                "train",
+                "--task",
+                "{task}",
+                "--manifest",
+                "{manifest}",
+                "--output",
+                "{output}",
+            ],
+        )
         # ``_run_manifest`` is injected by TrainingService. Keep it out of the
         # training config payload because the Isaac task entrypoint consumes
         # the manifest as a separate, immutable contract file.
@@ -119,7 +119,7 @@ class NativeIsaacLabProvider:
         manifest_path = target / "run_manifest.json"
         manifest_path.write_text(json.dumps(manifest.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         command = tuple(item.format(run_id=run_id, task=task_id, motion=str(motion_path), output=str(target), config=str(config_path), manifest=str(manifest_path)) for item in command_template)
-        result = run_external(stage="native_isaac_train", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_RUN_ID": run_id, "ALLROBOTRL_MOTION": str(motion_path), "ALLROBOTRL_OUTPUT": str(target), "ALLROBOTRL_CONFIG": str(config_path), "ALLROBOTRL_MANIFEST": str(manifest_path)})
+        result = run_external(stage="native_isaac_train", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env=self._process_env(ALLROBOTRL_RUN_ID=run_id, ALLROBOTRL_MOTION=str(motion_path), ALLROBOTRL_OUTPUT=str(target), ALLROBOTRL_CONFIG=str(config_path), ALLROBOTRL_MANIFEST=str(manifest_path)))
         checkpoint = IsaacLabRunner._find_checkpoint(target)
         if checkpoint is None:
             raise RunnerError("ISAAC_CHECKPOINT_MISSING", "native Isaac provider completed without a checkpoint", details={"workspace": str(target)})
@@ -131,8 +131,26 @@ class NativeIsaacLabProvider:
         isaac_lab, isaac_sim = self._checks()
         target = Path(output_dir or checkpoint_path.parent / "export").resolve()
         target.mkdir(parents=True, exist_ok=True)
-        command = tuple(item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target)) for item in self._require_command("NATIVE_ISAAC_EXPORT_COMMAND"))
-        result = run_external(stage="native_isaac_export", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_CHECKPOINT": str(checkpoint_path), "ALLROBOTRL_OUTPUT": str(target)})
+        isaac_python = isaac_lab.python or sys.executable
+        command = tuple(
+            item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target))
+            for item in self._require_command(
+                "NATIVE_ISAAC_EXPORT_COMMAND",
+                default=[
+                    isaac_python,
+                    "-m",
+                    "apps.isaac_tasks.entrypoint",
+                    "export",
+                    "--task",
+                    "{task}",
+                    "--checkpoint",
+                    "{checkpoint}",
+                    "--output",
+                    "{output}",
+                ],
+            )
+        )
+        result = run_external(stage="native_isaac_export", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env=self._process_env(ALLROBOTRL_CHECKPOINT=str(checkpoint_path), ALLROBOTRL_OUTPUT=str(target)))
         outputs = [path for path in target.rglob("*") if path.is_file() and path.name != "isaac_export.json"]
         if not outputs:
             raise RunnerError("ISAAC_EXPORT_OUTPUT_MISSING", "native Isaac provider produced no export files")
@@ -143,8 +161,26 @@ class NativeIsaacLabProvider:
         isaac_lab, isaac_sim = self._checks()
         target = Path(output_dir or checkpoint_path.parent / "play").resolve()
         target.mkdir(parents=True, exist_ok=True)
-        command = tuple(item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target)) for item in self._require_command("NATIVE_ISAAC_PLAY_COMMAND"))
-        result = run_external(stage="native_isaac_play", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_CHECKPOINT": str(checkpoint_path), "ALLROBOTRL_OUTPUT": str(target)})
+        isaac_python = isaac_lab.python or sys.executable
+        command = tuple(
+            item.format(checkpoint=str(checkpoint_path), task=task_id, output=str(target))
+            for item in self._require_command(
+                "NATIVE_ISAAC_PLAY_COMMAND",
+                default=[
+                    isaac_python,
+                    "-m",
+                    "apps.isaac_tasks.entrypoint",
+                    "play",
+                    "--task",
+                    "{task}",
+                    "--checkpoint",
+                    "{checkpoint}",
+                    "--output",
+                    "{output}",
+                ],
+            )
+        )
+        result = run_external(stage="native_isaac_play", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env=self._process_env(ALLROBOTRL_CHECKPOINT=str(checkpoint_path), ALLROBOTRL_OUTPUT=str(target)))
         outputs = [path for path in target.rglob("*") if path.is_file()]
         manifest = write_output_manifest(target, stage="native_isaac_play", outputs=outputs, metadata={"runtime": isaac_lab.as_dict(), "runtime_dependencies": [isaac_sim.as_dict()], "provider": self.name, "adapter_version": self.version, "task_id": task_id})
         return ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {path.name: path for path in outputs}, manifest)
@@ -152,4 +188,4 @@ class NativeIsaacLabProvider:
 
 IsaacLabProvider = NativeIsaacLabProvider
 
-__all__ = ["NativeIsaacLabProvider", "IsaacLabProvider", "TrainingProvider", "UnitreeRLLabProvider"]
+__all__ = ["NativeIsaacLabProvider", "IsaacLabProvider", "TrainingProvider"]

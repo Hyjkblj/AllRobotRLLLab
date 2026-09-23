@@ -33,3 +33,12 @@ def test_runtime_doctor_reports_stale_repository_manifest(tmp_path) -> None:
     report = registry.doctor(profile="api")
     assert report["status"] == "NOT_READY"
     assert any(item["name"] == "runtime_manifest" for item in report["failures"])
+
+
+def test_runtime_doctor_native_g1_profile_requires_training_urdf(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("ROBOT_ADAPTER_MODULES", "adapters.unitree_g1_29dof")
+    monkeypatch.delenv("G1_ISAAC_URDF_PATH", raising=False)
+    registry = RuntimeRegistry(registration_path=tmp_path / "registrations.json")
+    report = registry.doctor(profile="native-isaac-gpu")
+    assert report["status"] == "NOT_READY"
+    assert any(item.get("name") == "g1_isaac_urdf" for item in report["failures"])

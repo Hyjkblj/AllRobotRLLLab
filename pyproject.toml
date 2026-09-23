@@ -37,4 +37,4 @@ pythonpath = ["."]
 testpaths = ["backend/tests"]
 
 [tool.setuptools.packages.find]
-include = ["backend*", "packages*", "tools*"]
+include = ["apps*", "backend*", "packages*", "tools*"]

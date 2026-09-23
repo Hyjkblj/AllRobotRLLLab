@@ -164,10 +164,19 @@ def _doctor(args: argparse.Namespace) -> int:
             probe = subprocess.run([sys.executable, "-c", "import importlib.util,pathlib; s=importlib.util.find_spec('isaacsim'); print(pathlib.Path(s.origin).resolve().parent.parent if s and s.origin and pathlib.Path(s.origin).resolve().parent.name == 'isaacsim' else '')"], cwd=ROOT, capture_output=True, text=True, check=False)
             value = probe.stdout.strip()
         checks[variable] = {"ok": bool(value) and Path(value).expanduser().is_dir(), "required": gpu_required, "path": value or None, "fix": f"Set {variable} to the locked external runtime directory"}
+    enabled_adapters = {item.strip() for item in (env("ROBOT_ADAPTER_MODULES") or "adapters.unitree_g1_29dof").split(",") if item.strip()}
+    if "adapters.unitree_g1_29dof" in enabled_adapters:
+        g1_isaac_urdf = env("G1_ISAAC_URDF_PATH")
+        checks["G1_ISAAC_URDF_PATH"] = {
+            "ok": bool(g1_isaac_urdf) and Path(g1_isaac_urdf).expanduser().is_file(),
+            "required": gpu_required,
+            "path": g1_isaac_urdf or None,
+            "fix": "Set G1_ISAAC_URDF_PATH to the G1 29 DoF Unitree ROS URDF",
+        }
     runtime_script = ROOT / "scripts" / "check_external_runtime.py"
     if all(checks[name].get("ok") for name in runtime_variables):
         runtime_env = os.environ.copy()
-        runtime_env.update({name: env(name) for name in ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH")})
+        runtime_env.update({name: env(name) for name in ("ISAACLAB_PATH", "ISAACSIM_PATH", "GMR_PATH", "GVHMR_PATH", "UNITREE_MUJOCO_PATH", "G1_ISAAC_URDF_PATH", "ROBOT_ADAPTER_MODULES")})
         result = subprocess.run([sys.executable, str(runtime_script), "--registration", str(registration_file)], cwd=ROOT, env=runtime_env, capture_output=True, text=True, check=False)
         checks["external_runtime"] = {"ok": result.returncode == 0, "required": gpu_required, "details": (result.stdout + result.stderr).strip(), "fix": "Check the pinned Git SHA values in README.md"}
     else:
