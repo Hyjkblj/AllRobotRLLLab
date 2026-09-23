@@ -38,6 +38,59 @@ PINNED_PATHS = {
     "UNITREE_MUJOCO_PATH": "unitree_mujoco",
 }
 
+# A runtime checkout is identified by its Git commit whenever possible.  For
+# source trees which are not Git checkouts we still provide a content identity,
+# but only for source-like files.  Training logs, generated artifacts and model
+# weights can be many gigabytes and are not part of the runtime source identity.
+_IGNORED_SOURCE_DIRS = frozenset({
+    ".git",
+    ".hg",
+    ".svn",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
+    "cache",
+    "logs",
+    "log",
+    "runs",
+    "wandb",
+    "checkpoints",
+    "checkpoint",
+    "exported_model",
+    "artifacts",
+    "videos",
+    "video",
+    "node_modules",
+})
+
+_IGNORED_SOURCE_SUFFIXES = frozenset({
+    ".pt",
+    ".pth",
+    ".ckpt",
+    ".safetensors",
+    ".onnx",
+    ".bin",
+    ".engine",
+    ".jit",
+    ".torchscript",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".mkv",
+    ".webm",
+    ".gif",
+    ".npy",
+    ".npz",
+    ".pkl",
+    ".pickle",
+    ".tar",
+    ".gz",
+    ".zip",
+    ".7z",
+})
+
 
 def _discover_isaacsim() -> Path | None:
     spec = importlib.util.find_spec("isaacsim")
@@ -71,11 +124,37 @@ def _source_hash(path: Path) -> str | None:
     if not path.is_dir():
         return None
     digest = hashlib.sha256()
-    for file in sorted(item for item in path.rglob("*") if item.is_file() and ".git" not in item.parts):
-        digest.update(file.relative_to(path).as_posix().encode("utf-8"))
-        with file.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
+    files: list[Path] = []
+    # ``Path.rglob`` walks every generated artifact before the caller can
+    # filter it.  ``os.walk`` lets us prune ignored directories up front and
+    # also avoids following symlinked trees outside the registered runtime.
+    for current, directories, filenames in os.walk(path, topdown=True, followlinks=False):
+        directories[:] = sorted(
+            name for name in directories
+            if name not in _IGNORED_SOURCE_DIRS and not name.startswith(".")
+        )
+        current_path = Path(current)
+        for name in filenames:
+            candidate = current_path / name
+            if candidate.suffix.lower() in _IGNORED_SOURCE_SUFFIXES:
+                continue
+            try:
+                if candidate.is_file() and not candidate.is_symlink():
+                    files.append(candidate)
+            except OSError:
+                continue
+    for file in sorted(files):
+        try:
+            relative = file.relative_to(path).as_posix()
+            with file.open("rb") as stream:
+                digest.update(relative.encode("utf-8"))
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        except OSError:
+            # A concurrently removed or unreadable generated file should not
+            # make the manifest command hang or fail after the source set was
+            # selected.  The remaining files still provide a useful identity.
+            continue
     return digest.hexdigest()
 
 
@@ -164,12 +243,15 @@ def collect(root: Path, *, profile: str | None = None) -> dict[str, Any]:
             external[name] = {"env": variable, "status": "not_configured"}
             continue
         path = Path(raw).expanduser().resolve()
+        git_sha = _git_revision(path) if path.is_dir() else None
         external[name] = {
             "env": variable,
             "path": str(path),
             "exists": path.is_dir(),
-            "git_sha": _git_revision(path) if path.is_dir() else None,
-            "source_sha256": _source_hash(path) if path.is_dir() else None,
+            "git_sha": git_sha,
+            # Git checkouts are already immutably identified by HEAD.  Avoid
+            # hashing their generated logs, caches and weights entirely.
+            "source_sha256": _source_hash(path) if path.is_dir() and not git_sha else None,
         }
     packages: dict[str, str | None] = {}
     for package in ("torch", "isaaclab", "mujoco", "celery", "fastapi"):
