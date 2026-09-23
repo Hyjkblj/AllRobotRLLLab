@@ -496,8 +496,25 @@ class MotionPipelineService:
         body_quat = np.asarray(compiled["body_quat_w"], dtype=np.float32)
         body_lin_vel = np.asarray(compiled["body_lin_vel_w"], dtype=np.float32)
         body_ang_vel = np.asarray(compiled["body_ang_vel_w"], dtype=np.float32)
-        np.savez_compressed(output_path, joint_pos=joint_pos, joint_vel=joint_vel, body_pos_w=body_pos, body_quat_w=body_quat, body_lin_vel_w=body_lin_vel, body_ang_vel_w=body_ang_vel, fps=np.asarray(arrays.fps, dtype=np.float32), joint_names=np.asarray(arrays.joint_names), body_names=np.asarray(body_names), coord_frame=np.asarray(arrays.coord_frame), quat_convention=np.asarray("wxyz"))
         source_hash = version.sha256 or sha256_file(self._resolve_source(version))
+        compiler_version = str(compiled.get("compiler_version", f"{target.name}-direct-trajectory.v1"))
+        np.savez_compressed(
+            output_path,
+            joint_pos=joint_pos,
+            joint_vel=joint_vel,
+            body_pos_w=body_pos,
+            body_quat_w=body_quat,
+            body_lin_vel_w=body_lin_vel,
+            body_ang_vel_w=body_ang_vel,
+            fps=np.asarray(arrays.fps, dtype=np.float32),
+            joint_names=np.asarray(arrays.joint_names),
+            body_names=np.asarray(body_names),
+            coord_frame=np.asarray(arrays.coord_frame),
+            quat_convention=np.asarray("wxyz"),
+            robot_id=np.asarray(target.name),
+            source_motion_hash=np.asarray(source_hash),
+            compiler_version=np.asarray(compiler_version),
+        )
         arrays_meta = {
             "joint_pos": ArrayField(path="joint_pos", shape=list(joint_pos.shape), dtype="float32"),
             "joint_vel": ArrayField(path="joint_vel", shape=list(joint_vel.shape), dtype="float32"),
@@ -506,7 +523,7 @@ class MotionPipelineService:
             "body_lin_vel_w": ArrayField(path="body_lin_vel_w", shape=list(body_lin_vel.shape), dtype="float32"),
             "body_ang_vel_w": ArrayField(path="body_ang_vel_w", shape=list(body_ang_vel.shape), dtype="float32"),
         }
-        train = TrainMotionNPZ(robot_id=target.name, fps=arrays.fps, frame_count=len(joint_pos), joint_names=list(arrays.joint_names), body_names=body_names, arrays=arrays_meta, coord_frame=arrays.coord_frame, quat_convention="wxyz", source_motion_hash=source_hash, compiler_version=str(compiled.get("compiler_version", f"{target.name}-direct-trajectory.v1")))
+        train = TrainMotionNPZ(robot_id=target.name, fps=arrays.fps, frame_count=len(joint_pos), joint_names=list(arrays.joint_names), body_names=body_names, arrays=arrays_meta, coord_frame=arrays.coord_frame, quat_convention="wxyz", source_motion_hash=source_hash, compiler_version=compiler_version)
         return train, output_path
 
     def _publish(self, output_path: Path, train_motion: TrainMotionNPZ, source_asset: AssetRecord) -> tuple[AssetVersion, str]:

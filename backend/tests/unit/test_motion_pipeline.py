@@ -40,7 +40,27 @@ def test_direct_g1_motion_pipeline_publishes_train_motion(tmp_path):
     with uow:
         output = uow.assets.version(record.output_asset_version_id)
     assert output is not None and output.status.value == "READY"
-    assert object_store.resolve_path(output.object_key).is_file()
+    output_path = object_store.resolve_path(output.object_key)
+    assert output_path.is_file()
+    with np.load(output_path, allow_pickle=False) as archive:
+        assert {
+            "joint_pos",
+            "joint_vel",
+            "body_pos_w",
+            "body_quat_w",
+            "body_lin_vel_w",
+            "body_ang_vel_w",
+            "fps",
+            "joint_names",
+            "body_names",
+            "coord_frame",
+            "quat_convention",
+            "robot_id",
+            "source_motion_hash",
+            "compiler_version",
+        } <= set(archive.files)
+        assert str(np.asarray(archive["robot_id"]).reshape(-1)[0]) == "unitree_g1_29dof"
+        assert len(str(np.asarray(archive["source_motion_hash"]).reshape(-1)[0])) == 64
 
 
 def test_motion_loader_uses_robot_root_height_metadata(tmp_path):
