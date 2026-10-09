@@ -204,6 +204,7 @@ def write_output_manifest(root: Path, *, stage: str, outputs: Iterable[Path], me
     if not records:
         raise RunnerError("RUNTIME_OUTPUT_MISSING", f"{stage} produced no output files")
     manifest = root / "manifest" / f"{stage}.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps({"schema_version": "external_stage_manifest.v1", "stage": stage, "outputs": records, "metadata": metadata or {}}, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return manifest
 

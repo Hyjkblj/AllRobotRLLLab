@@ -407,9 +407,25 @@ class TrainingService:
             evaluator = FakeSim2SimAdapter()
         if hasattr(evaluator, "backend") and evaluator.backend in {"unitree_mujoco", "mujoco"}:
             policy_path = self._policy_path(run_id, checkpoint)
+            motion_path = self._materialize_asset(
+                config.motion_asset_version_id,
+                Path(checkpoint.uri).parent / "sim2sim" / "input" / "train_motion.npz",
+            )
+            manifest_motion_hash = str((run.manifest.motion or {}).get("train_motion_sha256", "")).strip()
+            with self.run_service.uow:
+                materialized_version = self.run_service.uow.assets.version(config.motion_asset_version_id)
+            if materialized_version is not None and materialized_version.sha256 and materialized_version.sha256 != manifest_motion_hash:
+                raise TrainingServiceError("TRAIN_MOTION_HASH_MISMATCH", "asset hash does not match the frozen Run Manifest", status_code=409)
+            try:
+                validate_train_motion_file(motion_path, adapter_spec.get_spec(), expected_sha256=manifest_motion_hash)
+            except TrainMotionFileError as exc:
+                raise TrainingServiceError("TRAIN_MOTION_CONTRACT_INVALID", str(exc), status_code=409) from exc
             try:
                 with external_run_context(run_id=run_id, runtime_root=settings.runtime_root):
-                    executions = [evaluator.evaluate(seed=seed, policy_path=policy_path, run_id=run_id) for seed in seeds]
+                    executions = [
+                        evaluator.evaluate(seed=seed, policy_path=policy_path, motion_path=motion_path, run_id=run_id)
+                        for seed in seeds
+                    ]
                 self._ensure_not_cancelled(run_id)
             except RunnerError as exc:
                 self._mark_failed_if_active(run_id, stage="sim2sim", message=str(exc))
@@ -462,7 +478,7 @@ class TrainingService:
     def _policy_path(self, run_id: str, checkpoint: CheckpointRecord) -> Path:
         exported = self.export_results.get(run_id)
         if exported is not None:
-            for item in exported.files:
+            for item in sorted(exported.files, key=lambda value: value.path.lower().endswith(".onnx"), reverse=True):
                 candidate = exported.output_dir / item.path
                 if candidate.suffix.lower() in {".pt", ".onnx"} and candidate.is_file():
                     return candidate

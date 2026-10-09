@@ -113,7 +113,6 @@ class Settings:
         if self.platform_role in {"gpu", "worker-gpu"} or self.runtime_profile in {"gpu", "isaac-gpu", "native-isaac-gpu", "sim2sim-gpu"}:
             command_requirements = {
                 "isaac_lab": ("NATIVE_ISAAC_TRAIN_COMMAND", "NATIVE_ISAAC_EXPORT_COMMAND", "NATIVE_ISAAC_PLAY_COMMAND"),
-                "unitree_mujoco": ("UNITREE_SIM2SIM_COMMAND",),
             }
             for variable in command_requirements.get(self.p3_backend, ()):
                 if not os.getenv(variable, "").strip():

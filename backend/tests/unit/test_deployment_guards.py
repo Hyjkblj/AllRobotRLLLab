@@ -63,7 +63,7 @@ def test_gpu_worker_requires_native_isaac_command_templates(monkeypatch) -> None
         settings.app_env, settings.platform_role, settings.runtime_profile, settings.p3_backend = original
 
 
-def test_gpu_worker_requires_unitree_sim2sim_wrapper(monkeypatch) -> None:
+def test_gpu_worker_uses_project_unitree_sim2sim_wrapper(monkeypatch) -> None:
     original = (settings.app_env, settings.platform_role, settings.runtime_profile, settings.p3_backend)
     try:
         settings.app_env = "staging"
@@ -71,6 +71,6 @@ def test_gpu_worker_requires_unitree_sim2sim_wrapper(monkeypatch) -> None:
         settings.runtime_profile = "gpu"
         settings.p3_backend = "unitree_mujoco"
         monkeypatch.delenv("UNITREE_SIM2SIM_COMMAND", raising=False)
-        assert any("UNITREE_SIM2SIM_COMMAND" in error for error in settings.deployment_errors())
+        assert not any("UNITREE_SIM2SIM_COMMAND" in error for error in settings.deployment_errors())
     finally:
         settings.app_env, settings.platform_role, settings.runtime_profile, settings.p3_backend = original

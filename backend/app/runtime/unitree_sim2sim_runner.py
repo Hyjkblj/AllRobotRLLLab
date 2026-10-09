@@ -23,19 +23,31 @@ class UnitreeMuJoCoRunner:
         self.workspace = Path(workspace).resolve()
         self.timeout_seconds = timeout_seconds
 
-    def evaluate(self, *, seed: int, policy_path: Path | None = None, run_id: str = "run", output_dir: Path | None = None) -> Sim2SimExecution:
+    def evaluate(self, *, seed: int, policy_path: Path | None = None, motion_path: Path | None = None, run_id: str = "run", output_dir: Path | None = None) -> Sim2SimExecution:
         check = self.registry.require("unitree_mujoco")
         target = Path(output_dir or self.workspace / run_id / f"seed-{seed}").resolve()
         target.mkdir(parents=True, exist_ok=True)
         if policy_path is None:
             raise RunnerError("SIM2SIM_POLICY_MISSING", "a policy path is required for Unitree MuJoCo evaluation")
+        if motion_path is None:
+            raise RunnerError("SIM2SIM_MOTION_MISSING", "a frozen TrainMotionNPZ path is required for Unitree MuJoCo evaluation")
         configured = command_from_env("UNITREE_SIM2SIM_COMMAND")
-        if not configured:
-            raise RunnerError("SIM2SIM_COMMAND_MISSING", "UNITREE_SIM2SIM_COMMAND must point to a project sim2sim wrapper; upstream unitree_mujoco and g1_ctrl require orchestration")
-        command = tuple(item.format(seed=seed, policy=str(policy_path), output=str(target), run_id=run_id) for item in configured)
+        template = configured or (
+            check.python or "python",
+            "-m", "apps.mujoco_sim2sim.g1",
+            "--seed", "{seed}",
+            "--policy", "{policy}",
+            "--motion", "{motion}",
+            "--output", "{output}",
+            "--unitree-mujoco-root", str(check.path),
+        )
+        command = tuple(
+            item.format(seed=seed, policy=str(policy_path), motion=str(motion_path), output=str(target), run_id=run_id)
+            for item in template
+        )
         started = time.perf_counter()
         try:
-            result = run_external(stage=f"sim2sim_seed_{seed}", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_RUN_ID": run_id, "ALLROBOTRL_SEED": str(seed), "ALLROBOTRL_POLICY": str(policy_path), "ALLROBOTRL_OUTPUT": str(target)})
+            result = run_external(stage=f"sim2sim_seed_{seed}", workspace=target, command=command, timeout_seconds=self.timeout_seconds, env={"ALLROBOTRL_RUN_ID": run_id, "ALLROBOTRL_SEED": str(seed), "ALLROBOTRL_POLICY": str(policy_path), "ALLROBOTRL_MOTION": str(motion_path), "ALLROBOTRL_OUTPUT": str(target)})
         except RunnerError as exc:
             return Sim2SimExecution(seed, "FAILED", int(exc.details.get("return_code", 1)), time.perf_counter() - started, {}, list(command), stderr=str(exc))
         metrics = self._read_metrics(target)

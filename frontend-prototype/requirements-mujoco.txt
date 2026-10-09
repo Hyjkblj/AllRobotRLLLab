@@ -2,7 +2,8 @@
 # PyPI currently provides the compatible Windows wheel as 3.12.0.
 numpy==1.26.4
 mujoco==3.12.0
+onnxruntime>=1.20,<2
 
-# Optional: only needed when a .pt file contains a qpos/action tensor.
-# Policy-only checkpoints remain visible in the asset library without torch.
+# Optional: only needed to execute a TorchScript policy instead of the
+# standard ONNX sim2sim artifact.
 # torch==2.5.1
