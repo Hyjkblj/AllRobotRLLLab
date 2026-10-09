@@ -32,9 +32,10 @@ class UnitreeMuJoCoRunner:
         if motion_path is None:
             raise RunnerError("SIM2SIM_MOTION_MISSING", "a frozen TrainMotionNPZ path is required for Unitree MuJoCo evaluation")
         configured = command_from_env("UNITREE_SIM2SIM_COMMAND")
+        evaluator_script = Path(__file__).resolve().parents[3] / "apps" / "mujoco_sim2sim" / "g1.py"
         template = configured or (
             check.python or "python",
-            "-m", "apps.mujoco_sim2sim.g1",
+            str(evaluator_script),
             "--seed", "{seed}",
             "--policy", "{policy}",
             "--motion", "{motion}",

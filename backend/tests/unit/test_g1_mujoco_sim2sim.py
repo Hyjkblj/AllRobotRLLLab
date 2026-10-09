@@ -8,12 +8,12 @@ from apps.mujoco_sim2sim.g1 import (
     BODY_NAMES,
     JOINT_NAMES,
     Policy,
+    ROBOT_ID,
+    TRAIN_MOTION_FORMAT,
     _control_gains,
     _quat_error_deg,
     evaluate,
 )
-from adapters.unitree_g1_29dof import UnitreeG1Adapter
-from backend.app.domain.contracts import SchemaVersion
 
 
 def test_g1_observation_and_control_contract() -> None:
@@ -64,12 +64,11 @@ def test_real_unitree_mujoco_model_executes_project_policy_loop(tmp_path: Path) 
     body_pos[:, 0, 2] = 0.793
     body_quat = np.zeros((frames, body_count, 4), dtype=np.float32)
     body_quat[..., 0] = 1.0
-    robot = UnitreeG1Adapter(repository_root=repository).get_spec()
     motion_path = tmp_path / "motion.npz"
     np.savez_compressed(
         motion_path,
-        format_version=np.asarray(SchemaVersion.TRAIN_MOTION.value),
-        robot_id=np.asarray(robot.robot_id),
+        format_version=np.asarray(TRAIN_MOTION_FORMAT),
+        robot_id=np.asarray(ROBOT_ID),
         fps=np.asarray(50.0),
         joint_names=np.asarray(JOINT_NAMES),
         body_names=np.asarray(BODY_NAMES),

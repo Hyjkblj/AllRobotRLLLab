@@ -61,5 +61,7 @@ def test_unitree_runner_default_command_includes_policy_motion_and_runtime(tmp_p
     motion.write_bytes(b"motion")
     result = UnitreeMuJoCoRunner(registry=registry, workspace=tmp_path / "runs").evaluate(seed=7, policy_path=policy, motion_path=motion)
     assert result.status == "PASSED"
-    assert captured["command"][:3] == (str(python), "-m", "apps.mujoco_sim2sim.g1")
+    assert captured["command"][0] == str(python)
+    expected_script = Path(__file__).resolve().parents[3] / "apps" / "mujoco_sim2sim" / "g1.py"
+    assert Path(captured["command"][1]).resolve() == expected_script.resolve()
     assert captured["env"]["ALLROBOTRL_MOTION"] == str(motion)

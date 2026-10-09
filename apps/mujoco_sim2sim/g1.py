@@ -34,6 +34,8 @@ MUJOCO_METRIC_BODY_NAMES = ("pelvis", "left_ankle_roll_link", "right_ankle_roll_
 CONTROL_DT = 0.02
 ACTION_SCALE = 0.25
 BASE_OBSERVATION_DIM = len(JOINT_NAMES) * 4 + 6
+TRAIN_MOTION_FORMAT = "train_motion.v1"
+ROBOT_ID = "unitree_g1_29dof"
 
 ARMATURE_5020 = 0.003609725
 ARMATURE_7520_14 = 0.010177520
@@ -123,13 +125,28 @@ class Policy:
 
 
 def _load_motion(path: Path) -> dict[str, Any]:
-    from adapters.unitree_g1_29dof import UnitreeG1Adapter
-    from backend.app.application.train_motion_validator import validate_train_motion_file
-
-    robot = UnitreeG1Adapter(repository_root=Path(__file__).resolve().parents[2]).get_spec()
-    validate_train_motion_file(path, robot)
     with np.load(path, allow_pickle=False) as archive:
-        return {
+        required = {
+            "format_version", "robot_id", "fps", "joint_names", "body_names",
+            "coord_frame", "quat_convention", "source_motion_hash", "compiler_version",
+            "joint_pos", "joint_vel", "body_pos_w", "body_quat_w",
+            "body_lin_vel_w", "body_ang_vel_w",
+        }
+        missing = required.difference(archive.files)
+        if missing:
+            raise RuntimeError(f"TrainMotionNPZ is missing fields: {sorted(missing)}")
+        scalar = lambda name: np.asarray(archive[name]).item()
+        if str(scalar("format_version")) != TRAIN_MOTION_FORMAT:
+            raise RuntimeError(f"TrainMotionNPZ format_version must be {TRAIN_MOTION_FORMAT}")
+        if str(scalar("robot_id")) != ROBOT_ID:
+            raise RuntimeError(f"TrainMotionNPZ robot_id must be {ROBOT_ID}")
+        if str(scalar("coord_frame")) != "world_z_up" or str(scalar("quat_convention")) != "wxyz":
+            raise RuntimeError("TrainMotionNPZ coordinate or quaternion convention is incompatible")
+        if tuple(str(value) for value in np.asarray(archive["joint_names"]).tolist()) != JOINT_NAMES:
+            raise RuntimeError("TrainMotionNPZ joint_names do not match G1 order")
+        if tuple(str(value) for value in np.asarray(archive["body_names"]).tolist()) != BODY_NAMES:
+            raise RuntimeError("TrainMotionNPZ body_names do not match G1 order")
+        result = {
             "fps": float(np.asarray(archive["fps"]).item()),
             "joint_pos": np.asarray(archive["joint_pos"], dtype=np.float64),
             "joint_vel": np.asarray(archive["joint_vel"], dtype=np.float64),
@@ -138,6 +155,24 @@ def _load_motion(path: Path) -> dict[str, Any]:
             "body_lin_vel_w": np.asarray(archive["body_lin_vel_w"], dtype=np.float64),
             "body_ang_vel_w": np.asarray(archive["body_ang_vel_w"], dtype=np.float64),
         }
+    frames = result["joint_pos"].shape[0] if result["joint_pos"].ndim == 2 else 0
+    expected_shapes = {
+        "joint_pos": (frames, len(JOINT_NAMES)),
+        "joint_vel": (frames, len(JOINT_NAMES)),
+        "body_pos_w": (frames, len(BODY_NAMES), 3),
+        "body_quat_w": (frames, len(BODY_NAMES), 4),
+        "body_lin_vel_w": (frames, len(BODY_NAMES), 3),
+        "body_ang_vel_w": (frames, len(BODY_NAMES), 3),
+    }
+    if frames < 2 or not 15.0 <= result["fps"] <= 120.0:
+        raise RuntimeError("TrainMotionNPZ must contain at least two frames at 15-120 fps")
+    for name, shape in expected_shapes.items():
+        if result[name].shape != shape or not np.isfinite(result[name]).all():
+            raise RuntimeError(f"TrainMotionNPZ {name} must be finite with shape {shape}")
+    quaternion_norms = np.linalg.norm(result["body_quat_w"], axis=-1)
+    if float(np.max(np.abs(quaternion_norms - 1.0))) > 1.0e-3:
+        raise RuntimeError("TrainMotionNPZ body_quat_w is not normalized")
+    return result
 
 
 def _resample_motion(motion: dict[str, Any]) -> dict[str, Any]:
@@ -394,4 +429,4 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["ACTION_SCALE", "BASE_OBSERVATION_DIM", "BODY_NAMES", "CONTROL_DT", "JOINT_NAMES", "MUJOCO_METRIC_BODY_NAMES", "evaluate", "main"]
+__all__ = ["ACTION_SCALE", "BASE_OBSERVATION_DIM", "BODY_NAMES", "CONTROL_DT", "JOINT_NAMES", "MUJOCO_METRIC_BODY_NAMES", "ROBOT_ID", "TRAIN_MOTION_FORMAT", "evaluate", "main"]
