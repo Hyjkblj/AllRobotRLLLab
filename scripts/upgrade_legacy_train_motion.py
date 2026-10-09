@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
@@ -39,6 +41,7 @@ REQUIRED_ARRAYS = (
     "body_ang_vel_w",
 )
 UPGRADER_VERSION = "legacy-train-motion-metadata-upgrade.v1"
+BODY_ARRAYS = ("body_pos_w", "body_quat_w", "body_lin_vel_w", "body_ang_vel_w")
 
 
 def sha256_file(path: Path) -> str:
@@ -49,12 +52,67 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def load_source_body_names(path: Path) -> tuple[str, ...]:
+    source = Path(path).expanduser().resolve()
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise TrainMotionFileError(f"unable to read source body names JSON: {exc}") from exc
+    if not isinstance(payload, list) or not payload or not all(isinstance(value, str) for value in payload):
+        raise TrainMotionFileError("source body names JSON must be a non-empty string array")
+    names = tuple(value.strip() for value in payload)
+    if any(not name for name in names):
+        raise TrainMotionFileError("source body names must not contain empty values")
+    if len(set(names)) != len(names):
+        raise TrainMotionFileError("source body names must be unique")
+    return names
+
+
+def _select_robot_bodies(
+    arrays: dict[str, np.ndarray],
+    *,
+    robot_body_names: Sequence[str],
+    source_body_names: Sequence[str] | None,
+) -> tuple[dict[str, np.ndarray], tuple[int, ...]]:
+    body_count = arrays["body_pos_w"].shape[1] if arrays["body_pos_w"].ndim == 3 else 0
+    target_names = tuple(robot_body_names)
+    if source_body_names is None:
+        if body_count != len(target_names):
+            raise TrainMotionFileError(
+                f"legacy archive contains {body_count} bodies but RobotSpec requires {len(target_names)}; "
+                "provide --source-body-names-file from the asset that produced the archive"
+            )
+        return arrays, tuple(range(body_count))
+
+    source_names = tuple(source_body_names)
+    if len(source_names) != body_count:
+        raise TrainMotionFileError(
+            f"source body names count {len(source_names)} does not match legacy body count {body_count}"
+        )
+    if len(set(source_names)) != len(source_names):
+        raise TrainMotionFileError("source body names must be unique")
+    missing = [name for name in target_names if name not in source_names]
+    if missing:
+        raise TrainMotionFileError(f"source body names do not contain RobotSpec bodies: {missing}")
+    indexes = tuple(source_names.index(name) for name in target_names)
+    selected = dict(arrays)
+    for name in BODY_ARRAYS:
+        value = arrays[name]
+        if value.ndim < 2 or value.shape[1] != body_count:
+            raise TrainMotionFileError(
+                f"{name} body dimension does not match body_pos_w ({value.shape} versus {body_count})"
+            )
+        selected[name] = value[:, indexes, ...]
+    return selected, indexes
+
+
 def upgrade_legacy_train_motion(
     source: Path,
     output: Path,
     *,
     robot,
     assume_robot_spec_order: bool,
+    source_body_names: Sequence[str] | None = None,
     force: bool = False,
 ) -> dict[str, object]:
     source = Path(source).expanduser().resolve()
@@ -91,6 +149,12 @@ def upgrade_legacy_train_motion(
     except (OSError, TypeError, ValueError) as exc:
         raise TrainMotionFileError(f"unable to read legacy motion archive: {exc}") from exc
 
+    arrays, body_indexes = _select_robot_bodies(
+        arrays,
+        robot_body_names=robot.body_names,
+        source_body_names=source_body_names,
+    )
+
     output.parent.mkdir(parents=True, exist_ok=True)
     source_sha256 = sha256_file(source)
     payload = {
@@ -124,6 +188,8 @@ def upgrade_legacy_train_motion(
         "robot_id": robot.robot_id,
         "fps": fps,
         "frames": int(arrays["joint_pos"].shape[0]),
+        "source_body_count": len(source_body_names) if source_body_names is not None else len(body_indexes),
+        "selected_body_indexes": ",".join(str(index) for index in body_indexes),
         "compiler_version": UPGRADER_VERSION,
     }
 
@@ -134,6 +200,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("output", type=Path)
     parser.add_argument("--robot-id", required=True)
     parser.add_argument("--assume-robot-spec-order", action="store_true")
+    parser.add_argument(
+        "--source-body-names-file",
+        type=Path,
+        help="JSON string array in the exact body-column order of the legacy archive",
+    )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
 
@@ -149,6 +220,9 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             robot=robot,
             assume_robot_spec_order=args.assume_robot_spec_order,
+            source_body_names=(
+                load_source_body_names(args.source_body_names_file) if args.source_body_names_file else None
+            ),
             force=args.force,
         )
     except TrainMotionFileError as exc:
@@ -162,4 +236,10 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["UPGRADER_VERSION", "main", "sha256_file", "upgrade_legacy_train_motion"]
+__all__ = [
+    "UPGRADER_VERSION",
+    "load_source_body_names",
+    "main",
+    "sha256_file",
+    "upgrade_legacy_train_motion",
+]
