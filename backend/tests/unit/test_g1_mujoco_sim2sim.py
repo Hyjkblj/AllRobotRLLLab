@@ -14,6 +14,7 @@ from apps.mujoco_sim2sim.g1 import (
     _quat_error_deg,
     evaluate,
 )
+from backend.app.domain.contracts import SchemaVersion
 
 
 def test_g1_observation_and_control_contract() -> None:
@@ -23,6 +24,7 @@ def test_g1_observation_and_control_contract() -> None:
     assert kp.shape == kd.shape == (29,)
     assert np.all(kp > 0.0)
     assert np.all(kd > 0.0)
+    assert TRAIN_MOTION_FORMAT == SchemaVersion.TRAIN_MOTION.value
 
 
 def test_quaternion_error_is_sign_invariant() -> None:

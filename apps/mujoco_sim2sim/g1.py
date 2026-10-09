@@ -34,7 +34,7 @@ MUJOCO_METRIC_BODY_NAMES = ("pelvis", "left_ankle_roll_link", "right_ankle_roll_
 CONTROL_DT = 0.02
 ACTION_SCALE = 0.25
 BASE_OBSERVATION_DIM = len(JOINT_NAMES) * 4 + 6
-TRAIN_MOTION_FORMAT = "train_motion.v1"
+TRAIN_MOTION_FORMAT = "train_motion_npz.v1"
 ROBOT_ID = "unitree_g1_29dof"
 
 ARMATURE_5020 = 0.003609725
