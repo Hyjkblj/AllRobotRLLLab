@@ -301,18 +301,13 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
   const [pipeline, setPipeline] = useState(null);
   const sourceAssets = assets.filter((asset) => ["motion", "video"].includes(asset.kind || asset.version?.kind));
   const selectedAsset = sourceAssets.find((asset) => asset.version?.asset_version_id === assetVersionId);
-  const selectedAssetKind = selectedAsset?.kind || selectedAsset?.version?.kind;
+  const selectedAssetKind = selectedAsset?.kind || selectedAsset?.version?.kind || (/\.(mp4|mov|avi|mkv|webm)$/i.test(selectedAsset?.version?.original_filename || "") ? "video" : undefined);
   const selectedAssetIsCompiled = /train_motion|TrainMotionNPZ/i.test(`${selectedAsset?.version?.original_filename || ""} ${selectedAsset?.display_name || ""}`);
   const selectedRobot = robots.find((item) => item.robot_id === selectedRobotId);
   const robotLabel = selectedRobot?.model || selectedRobot?.robot_id || "目标机器人";
 
   useEffect(() => {
-    let cancelled = false;
-    if (!assetVersionId) { setPipeline(null); return undefined; }
-    platformApi.getMotionPipeline(assetVersionId).then((result) => { if (!cancelled) setPipeline(result.item); }).catch((error) => {
-      if (!cancelled && error?.status !== 404) setLocalError(error);
-    });
-    return () => { cancelled = true; };
+    setPipeline(null);
   }, [assetVersionId]);
 
   useEffect(() => {
@@ -330,6 +325,10 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
 
   const detect = async (event) => {
     event.preventDefault();
+    if (selectedAssetKind === "video") {
+      setLocalError({ message: "视频只进行格式校验，请直接开始 GVHMR。" });
+      return;
+    }
     if (!path.trim() && !assetVersionId) return;
     setBusy(true); setLocalError(null);
     try { const result = await platformApi.detectMotion({ path: path.trim() || null, assetVersionId: assetVersionId || null, robotId: selectedRobotId }); onDetect(result.descriptor); }
