@@ -235,6 +235,11 @@ class InMemoryAssetRepository:
         with self._lock:
             return sorted((version for version in self._versions.values() if version.asset_id == asset_id), key=lambda version: version.version)
 
+    def delete(self, asset_id: str, asset_version_id: str) -> None:
+        with self._lock:
+            self._versions.pop(asset_version_id, None)
+            self._assets.pop(asset_id, None)
+
 
 class InMemoryArtifactRepository:
     def __init__(self, lock: threading.RLock) -> None:

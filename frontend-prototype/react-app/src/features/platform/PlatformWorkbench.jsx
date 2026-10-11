@@ -246,7 +246,7 @@ function Overview({ health, infrastructure, projects, robots, robotCheck, runs, 
   </>;
 }
 
-function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated, onAssetCreated, assets, onNavigate }) {
+function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated, onAssetCreated, assets, onNavigate, onAssetDeleted }) {
   const [projectName, setProjectName] = useState("");
   const [file, setFile] = useState(null);
   const [kind, setKind] = useState("motion");
@@ -271,6 +271,15 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
     catch (error) { setLocalError(error); }
     finally { setBusy(false); }
   };
+  const removeVideo = async (asset) => {
+    const versionId = asset.version?.asset_version_id;
+    if (!versionId || (asset.kind || asset.version?.kind) !== "video") return;
+    if (!window.confirm(`确认删除视频“${asset.version?.original_filename || asset.display_name}”？删除后不可恢复。`)) return;
+    setBusy(true); setLocalError(null);
+    try { await platformApi.deleteVideoAsset(versionId); onAssetDeleted?.(versionId); }
+    catch (error) { setLocalError(error); }
+    finally { setBusy(false); }
+  };
 
   return <>
     <SectionHeader eyebrow="PROJECTS & ASSETS" title="项目与资源" description="资产进入校验状态后，才可用于动作编译和训练。" />
@@ -288,7 +297,7 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
       </section>
     </div>
     <section className="platform-panel"><SectionHeader eyebrow="ASSET VERSIONS" title="已登记资源" action={<button className="button button-light" onClick={() => onNavigate("motion")}><GitBranch size={14} /> 动作流水线</button>} />
-          {assets.length ? <div className="asset-table"><div className="asset-table-head"><span>文件</span><span>类型</span><span>版本</span><span>状态</span><span>SHA-256</span></div>{assets.map((asset) => { const status = asset.completed?.item?.status || asset.version?.status || "UPLOADED"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.asset_id || asset.version?.asset_id}</small></span><Badge tone="silver">{assetKindLabel(asset.kind || asset.version?.kind)}</Badge><span>v{asset.version?.version || 1}</span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{statusLabel(status)}</Badge><code>{asset.sha256 ? `${asset.sha256.slice(0, 12)}…` : asset.version?.sha256 ? `${asset.version.sha256.slice(0, 12)}…` : "待生成"}</code></div>; })}</div> : <div className="empty-state">暂无资源</div>}
+          {assets.length ? <div className="asset-table"><div className="asset-table-head"><span>文件</span><span>类型</span><span>版本</span><span>状态</span><span>操作</span></div>{assets.map((asset) => { const status = asset.completed?.item?.status || asset.version?.status || "UPLOADED"; const isVideo = (asset.kind || asset.version?.kind) === "video"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.asset_id || asset.version?.asset_id}</small></span><Badge tone="silver">{assetKindLabel(asset.kind || asset.version?.kind)}</Badge><span>v{asset.version?.version || 1}</span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{statusLabel(status)}</Badge>{isVideo ? <button className="button button-danger" type="button" onClick={() => removeVideo(asset)} disabled={busy}>删除视频</button> : <span className="muted-note">—</span>}</div>; })}</div> : <div className="empty-state">暂无资源</div>}
     </section>
   </>;
 }
@@ -661,11 +670,14 @@ export default function PlatformWorkbench({ onOpenEditor }) {
     const normalized = asset.item ? { ...asset.item, version: asset.version, completed: asset.completed, sha256: asset.sha256 } : asset;
     setAssets((current) => [normalized, ...current.filter((item) => item.asset_id !== normalized.asset_id)]);
   };
+  const deleteAsset = (assetVersionId) => {
+    setAssets((current) => current.filter((item) => item.version?.asset_version_id !== assetVersionId));
+  };
   const addRun = (run) => { setRuns((current) => [run, ...current.filter((item) => item.run_id !== run.run_id)]); setSelectedRun(run); setView("training"); };
   const selectRun = async (run) => { if (run?.item) { setSelectedRun(run.item); return; } setSelectedRun(run); try { setSelectedRun((await platformApi.getRun(run.run_id)).item); } catch (loadError) { setError(loadError); } };
 
   const content = useMemo(() => {
-    if (view === "assets") return <Assets projects={projects} selectedProjectId={selectedProjectId} onSelectProject={setSelectedProjectId} onProjectCreated={createProject} onAssetCreated={addAsset} assets={assets} onNavigate={(target) => setView(target)} />;
+    if (view === "assets") return <Assets projects={projects} selectedProjectId={selectedProjectId} onSelectProject={setSelectedProjectId} onProjectCreated={createProject} onAssetCreated={addAsset} onAssetDeleted={deleteAsset} assets={assets} onNavigate={(target) => setView(target)} />;
     if (view === "motion") return <MotionPipeline assets={assets} robots={robots} selectedRobotId={selectedRobotId} onRobotSelect={setSelectedRobotId} detection={detection} onDetect={setDetection} onOpenEditor={onOpenEditor} onRefresh={refreshProject} />;
     if (view === "training") return <Training projects={projects} selectedProjectId={selectedProjectId} assets={assets} robots={robots} tasks={tasks} selectedRobotId={selectedRobotId} onRobotSelect={setSelectedRobotId} rewardTemplates={rewardTemplates} runs={runs} selectedRun={selectedRun} onRunCreated={addRun} onRunSelect={selectRun} onRefresh={refresh} onProjectRefresh={refreshProject} />;
     if (view === "sim2sim") return <Sim2SimView runs={runs} robots={robots} selectedRun={selectedRun} onRunSelect={selectRun} onNavigate={setView} />;

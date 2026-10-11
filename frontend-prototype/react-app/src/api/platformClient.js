@@ -92,6 +92,7 @@ export const platformApi = {
     return { ...created, completed, sha256: digest };
   },
   listAssetVersions: (assetId) => request(`/assets/${encodeURIComponent(assetId)}/versions`),
+  deleteVideoAsset: (assetVersionId) => request(`/assets/${encodeURIComponent(assetVersionId)}`, { method: "DELETE" }),
   detectMotion: ({ path, assetVersionId, robotId }) => request("/motions/detect", { method: "POST", body: JSON.stringify({ path: path || null, asset_version_id: assetVersionId || null, robot_id: robotId || null }) }),
   processMotion: (assetVersionId, editConfig = null, executionMode = "async", phase = "full") => request(`/motions/${encodeURIComponent(assetVersionId)}/process?phase=${encodeURIComponent(phase)}`, { method: "POST", headers: { "X-Execution-Mode": executionMode }, body: JSON.stringify({ edit_config: editConfig }) }),
   startGmr: (pipelineId) => request(`/motion-pipelines/${encodeURIComponent(pipelineId)}/gmr`, { method: "POST" }),

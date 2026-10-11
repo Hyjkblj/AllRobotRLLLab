@@ -107,6 +107,16 @@ class LocalObjectStore:
         shutil.copy2(source, target)
         return target
 
+    def delete(self, key: str) -> None:
+        safe_key = validate_object_key(key)
+        target = self._target_for_key(safe_key).resolve()
+        target.relative_to(self.root)
+        target.unlink(missing_ok=True)
+        if self.content_addressed:
+            index = self._read_index()
+            index.pop(safe_key, None)
+            self._write_index(index)
+
     def _target_for_key(self, safe_key: str, digest: str | None = None) -> Path:
         if self.content_addressed:
             relative = self._read_index().get(safe_key)
@@ -174,6 +184,9 @@ class MinioObjectStore:
         except Exception as exc:
             raise ObjectStoreError(f"object download failed: {safe_key}") from exc
         return target
+
+    def delete(self, key: str) -> None:
+        self.client.remove_object(self.bucket, validate_object_key(key))
 
 
 __all__ = ["LocalObjectStore", "MinioObjectStore", "ObjectStoreError", "validate_object_key"]

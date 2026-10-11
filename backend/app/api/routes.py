@@ -434,6 +434,15 @@ def list_asset_versions(asset_id: str, request: Request) -> dict:
     return {"request_id": _request_id(request), "asset": asset.model_dump(mode="json"), "items": [version.model_dump(mode="json") for version in versions], "resource_version": str(len(versions))}
 
 
+@router.delete("/assets/{asset_version_id}")
+def delete_asset(asset_version_id: str, request: Request) -> dict:
+    try:
+        asset, version = asset_service.delete_asset_version(actor=_actor(request), asset_version_id=asset_version_id, video_only=True)
+    except RunServiceError as exc:
+        raise _service_error(request, exc) from exc
+    return {"request_id": _request_id(request), "deleted": True, "asset_id": asset.asset_id, "asset_version_id": version.asset_version_id}
+
+
 @router.post("/assets/{asset_version_id}/upload-complete")
 def complete_asset_upload(asset_version_id: str, payload: AssetUploadCompleteRequest, request: Request) -> dict:
     try:

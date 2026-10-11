@@ -324,6 +324,11 @@ class PostgresAssetRepository(_Repository):
             cursor.execute("select * from asset_versions where asset_id=%s order by version", (_uuid(asset_id),))
             return [_asset_version(row) for row in cursor.fetchall()]
 
+    def delete(self, asset_id: str, asset_version_id: str) -> None:
+        with self.connection.cursor() as cursor:
+            cursor.execute("delete from asset_versions where id=%s", (_uuid(asset_version_id),))
+            cursor.execute("delete from assets where id=%s", (_uuid(asset_id),))
+
 
 class PostgresArtifactRepository(_Repository):
     def create(self, artifact: ArtifactRecord) -> ArtifactRecord:

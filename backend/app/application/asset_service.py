@@ -113,6 +113,24 @@ class AssetService:
             self._require_member(asset.project_id, actor.user_id, ProjectRole.VIEWER)
             return asset, self.uow.assets.list_versions(asset_id)
 
+    def delete_asset_version(self, *, actor: Actor, asset_version_id: str, video_only: bool = False) -> tuple[AssetRecord, AssetVersion]:
+        with self.uow:
+            version = self.uow.assets.version(asset_version_id)
+            asset = self.uow.assets.get(version.asset_id) if version else None
+            if version is None or asset is None:
+                raise RunServiceError("ASSET_VERSION_NOT_FOUND", f"asset version not found: {asset_version_id}", status_code=404)
+            self._require_member(asset.project_id, actor.user_id, ProjectRole.EDITOR)
+            if video_only and asset.kind != AssetKind.VIDEO:
+                raise RunServiceError("ASSET_KIND_INVALID", "only video assets can be deleted from this endpoint", status_code=409)
+            deleter = getattr(self.object_store, "delete", None)
+            if callable(deleter):
+                try:
+                    deleter(version.object_key)
+                except Exception as exc:
+                    raise RunServiceError("ASSET_OBJECT_DELETE_FAILED", "uploaded file could not be removed", status_code=503) from exc
+            self.uow.assets.delete(asset.asset_id, asset_version_id)
+            return asset, version
+
     def list_assets(self, *, actor: Actor, project_id: str) -> list[tuple[AssetRecord, list[AssetVersion]]]:
         with self.uow:
             self._require_member(project_id, actor.user_id, ProjectRole.VIEWER)
