@@ -71,8 +71,15 @@ class TrainingService:
         # An explicitly supplied provider map is authoritative. This allows
         # fake_smoke workers to receive an empty map even when runtime probes
         # have discovered external providers on the same host.
+        # Runtime factories may expose one provider under compatibility aliases
+        # (for example ``isaac_lab`` and ``native_isaac_lab``). The provider's
+        # canonical ``name`` is the registry identity, so collapse aliases
+        # before constructing the strict registry.
+        unique_training_providers = {}
+        for provider in self.training_providers.values():
+            unique_training_providers.setdefault(getattr(provider, "name", None), provider)
         self.training_provider_registry = (
-            TrainingProviderRegistry(self.training_providers.values())
+            TrainingProviderRegistry(unique_training_providers.values())
             if training_providers is not None or training_runner is not None
             else (training_provider_registry or TrainingProviderRegistry())
         )
