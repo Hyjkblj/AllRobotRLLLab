@@ -656,6 +656,28 @@ def get_motion_pipeline_by_id(pipeline_id: str, request: Request) -> dict:
     return {"request_id": _request_id(request), "item": record.model_dump(mode="json"), "resource_version": record.updated_at}
 
 
+@router.get("/motion-pipelines/{pipeline_id}/visualizations/{stage}/{artifact_path:path}")
+def get_motion_visualization(pipeline_id: str, stage: str, artifact_path: str, request: Request) -> FileResponse:
+    """Serve only recorded GVHMR/GMR visual artifacts for an authorized pipeline."""
+    if stage not in {"gvhmr", "gmr"}:
+        raise _error(request, "MOTION_ARTIFACT_STAGE_INVALID", "visualization stage must be gvhmr or gmr", status_code=400)
+    try:
+        record = motion_pipeline_service.get(actor=_actor(request), pipeline_id=pipeline_id)
+    except MotionPipelineError as exc:
+        raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
+    root = (settings.runtime_root / "motion_pipelines" / "external" / pipeline_id / stage).resolve()
+    target = (root / artifact_path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise _error(request, "MOTION_ARTIFACT_PATH_INVALID", "visualization path is outside the pipeline workspace", status_code=400) from exc
+    allowed = [item for item in (record.stages or []) if item.name in {"detect", "retarget"}]
+    stage_item = next((item for item in allowed if (stage == "gvhmr" and item.name == "detect") or (stage == "gmr" and item.name == "retarget")), None)
+    if stage_item is None or artifact_path not in stage_item.artifacts or not target.is_file():
+        raise _error(request, "MOTION_ARTIFACT_NOT_FOUND", "visualization artifact is not registered for this pipeline", status_code=404)
+    return FileResponse(target, filename=target.name)
+
+
 @router.post("/motion-edits")
 def create_motion_edit(payload: MotionEditConfig, request: Request, parent_version_id: str | None = Query(default=None)) -> dict:
     if not robot_registry.contains(payload.robot_id):

@@ -236,8 +236,8 @@ class MotionPipelineService:
             if asset.kind == AssetKind.MOTION:
                 self.motion_registry.detect(path, asset_version_id=asset_version_id, trusted_pickle=False)
             elif asset.kind == AssetKind.VIDEO:
-                if self.gvhmr_runner is None:
-                    raise MotionDetectionError("GVHMR_RUNTIME_UNAVAILABLE", "video processing requires the GVHMR Linux GPU runtime")
+                if path.suffix.lower() not in {".mp4", ".mov", ".mkv", ".avi", ".webm"}:
+                    raise MotionDetectionError("UNSUPPORTED_SOURCE_TYPE", f"unsupported video extension: {path.suffix.lower()}")
                 if path.stat().st_size == 0:
                     raise MotionDetectionError("SCHEMA_INVALID", "video object is empty")
             elif asset.kind == AssetKind.MODEL:
@@ -277,8 +277,23 @@ class MotionPipelineService:
                 record = self._stage(record, "detect", "SUCCEEDED", message="video accepted by GVHMR/GMR runtime", source_descriptor=descriptor)
                 record = self._stage(record, "retarget", "RUNNING")
                 try:
-                    gvhmr_output, _ = self.gvhmr_runner.run(video_path=path, output_dir=(self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gvhmr")
-                    generated_retarget, _ = self.gmr_runner.run(source_path=gvhmr_output, output_dir=(self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gmr", robot=getattr(adapter, "gmr_robot", adapter.name), target_dof=adapter.get_spec().dof)
+                    gvhmr_dir = (self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gvhmr"
+                    gvhmr_output, _ = self.gvhmr_runner.run(video_path=path, output_dir=gvhmr_dir)
+                    # GVHMR and GMR are separate quality gates.  Validate the
+                    # human-motion artifact before handing it to retargeting;
+                    # this keeps malformed hmr4d_results.pt failures local to
+                    # the GVHMR stage and avoids blaming GMR for them.
+                    validate_gvhmr = getattr(self.gvhmr_runner, "validate_output", None)
+                    if callable(validate_gvhmr):
+                        validate_gvhmr(gvhmr_output)
+                    gvhmr_artifacts = self._visual_artifacts(gvhmr_dir)
+                    if gvhmr_artifacts:
+                        record = self._stage(record, "detect", "SUCCEEDED", message="GVHMR 输出格式校验通过", artifacts=gvhmr_artifacts)
+                    gmr_dir = (self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gmr"
+                    generated_retarget, _ = self.gmr_runner.run(source_path=gvhmr_output, output_dir=gmr_dir, robot=getattr(adapter, "gmr_robot", adapter.name), target_dof=adapter.get_spec().dof)
+                    gmr_artifacts = self._visual_artifacts(gmr_dir)
+                    if gmr_artifacts:
+                        record = self._stage(record, "retarget", "SUCCEEDED", message="GMR 输出格式校验通过", artifacts=gmr_artifacts)
                 except RunnerError as runner_exc:
                     raise MotionPipelineError(runner_exc.code, str(runner_exc), status_code=503) from runner_exc
                 record = self._stage(record, "retarget", "SUCCEEDED", message="GVHMR/GMR retarget complete")
@@ -353,6 +368,14 @@ class MotionPipelineService:
                 raise
             raise MotionPipelineError("ASSET_OBJECT_NOT_FOUND", "uploaded motion object is not available", status_code=409) from exc
 
+    @staticmethod
+    def _visual_artifacts(root: Path) -> list[str]:
+        """Return bounded, relative visualization artifacts from a stage workspace."""
+        if not root.exists():
+            return []
+        allowed = {".mp4", ".webm", ".avi", ".mov", ".png", ".jpg", ".json"}
+        return [str(path.relative_to(root)) for path in sorted(root.rglob("*")) if path.is_file() and path.suffix.lower() in allowed and path.stat().st_size > 0]
+
     def _stage(self, record: MotionPipelineRecord, name: str, status: str, *, message: str | None = None, **updates: Any) -> MotionPipelineRecord:
         now = utc_now()
         stages = list(record.stages)
@@ -366,7 +389,8 @@ class MotionPipelineService:
                 duration = max(0.0, (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds())
             except ValueError:
                 duration = None
-        stages[index] = current.model_copy(update={"status": status, "started_at": started, "finished_at": finished, "duration_seconds": duration, "message": message or current.message, "error_code": updates.pop("error_code", current.error_code)})
+        artifacts = updates.pop("artifacts", None)
+        stages[index] = current.model_copy(update={"status": status, "started_at": started, "finished_at": finished, "duration_seconds": duration, "message": message or current.message, "error_code": updates.pop("error_code", current.error_code), "artifacts": artifacts if artifacts is not None else current.artifacts})
         record = record.model_copy(update={"stages": stages, "updated_at": now, **updates})
         self.store.save(record)
         return record

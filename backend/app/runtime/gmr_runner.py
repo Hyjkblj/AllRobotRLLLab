@@ -54,6 +54,8 @@ class GmrRunner:
         else:
             raise RunnerError("GMR_INPUT_UNSUPPORTED", f"GMR accepts GVHMR .pt or BVH input, got {source.suffix}")
         command = command_from_env("GMR_COMMAND", default=default)
+        if os.getenv("GMR_RECORD_VIDEO", "").strip().lower() in {"1", "true", "yes", "on"} and not custom_command:
+            command = (*command, "--record_video", "--video_path", str(target / "retarget_preview.mp4"))
         if command and any("{input}" in item or "{output}" in item for item in command):
             command = tuple(item.format(input=str(source), output=str(output), robot=robot_name) for item in command)
         result = run_external(stage="gmr", workspace=target, command=command or default, timeout_seconds=self.timeout_seconds, env={"GMR_INPUT": str(source), "GMR_OUTPUT": str(output), "GMR_ROBOT": robot_name})

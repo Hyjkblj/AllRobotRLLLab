@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from backend.app.runtime.contracts import ExternalRunResult, RunnerError
 from backend.app.runtime.process import command_from_env, run_external, write_output_manifest
@@ -46,6 +47,45 @@ class GVHMRRunner:
             raise RunnerError("RUNTIME_OUTPUT_MISSING", "GVHMR completed without hmr4d_results.pt", details={"workspace": str(target)})
         manifest = write_output_manifest(target, stage="gvhmr", outputs=[output], metadata={"runtime": check.as_dict(), "adapter_version": self.version})
         return output, ExternalRunResult(result.stage, result.command, result.return_code, result.stdout, result.stderr, result.workspace, {"gvhmr_result": output}, manifest)
+
+    @staticmethod
+    def validate_output(path: Path) -> dict[str, Any]:
+        """Validate GVHMR's serialized output without running GMR.
+
+        This is deliberately a format/schema gate only.  It does not judge
+        pose quality; that belongs to the later robot-retargeting checks.
+        """
+        source = Path(path).resolve()
+        if not source.is_file():
+            raise RunnerError("GVHMR_OUTPUT_NOT_FOUND", f"GVHMR output does not exist: {source}")
+        try:
+            import torch
+            try:
+                payload = torch.load(source, map_location="cpu", weights_only=False)
+            except TypeError:
+                payload = torch.load(source, map_location="cpu")
+        except Exception as exc:
+            raise RunnerError("GVHMR_OUTPUT_INVALID", f"unable to load GVHMR output: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise RunnerError("GVHMR_OUTPUT_SCHEMA_INVALID", "GVHMR output must be a dictionary")
+        params = payload.get("smpl_params_global") or payload.get("smpl_params")
+        if not isinstance(params, dict):
+            raise RunnerError("GVHMR_OUTPUT_SCHEMA_INVALID", "GVHMR output is missing smpl_params_global")
+        required = ("body_pose", "global_orient", "transl")
+        missing = [name for name in required if name not in params]
+        if missing:
+            raise RunnerError("GVHMR_OUTPUT_SCHEMA_INVALID", f"GVHMR output is missing fields: {', '.join(missing)}")
+        frames = None
+        for name in required:
+            value = params[name]
+            shape = getattr(value, "shape", None)
+            if shape is None or len(shape) < 2 or int(shape[0]) <= 0:
+                raise RunnerError("GVHMR_OUTPUT_SCHEMA_INVALID", f"GVHMR field {name} must contain frame data")
+            current = int(shape[0])
+            frames = current if frames is None else frames
+            if current != frames:
+                raise RunnerError("GVHMR_OUTPUT_SCHEMA_INVALID", "GVHMR fields have inconsistent frame counts")
+        return {"format": "gvhmr_hmr4d", "frame_count": frames, "fields": list(required)}
 
 
 GvhMrRunner = GVHMRRunner

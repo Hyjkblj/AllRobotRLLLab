@@ -96,6 +96,7 @@ export const platformApi = {
   processMotion: (assetVersionId, editConfig = null, executionMode = "async") => request(`/motions/${encodeURIComponent(assetVersionId)}/process`, { method: "POST", headers: { "X-Execution-Mode": executionMode }, body: JSON.stringify({ edit_config: editConfig }) }),
   getMotionPipeline: (assetVersionId) => request(`/motions/${encodeURIComponent(assetVersionId)}/pipeline`),
   getMotionPipelineById: (pipelineId) => request(`/motion-pipelines/${encodeURIComponent(pipelineId)}`),
+  getMotionVisualizationUrl: (pipelineId, stage, artifactPath) => `${PLATFORM_API}/motion-pipelines/${encodeURIComponent(pipelineId)}/visualizations/${encodeURIComponent(stage)}/${artifactPath.split("/").map(encodeURIComponent).join("/")}`,
   validateMotionEdit: (config) => request("/motion-edits", { method: "POST", body: JSON.stringify(config) }),
   compileMotionEdit: (versionId, arrays) => request(`/motion-edits/${encodeURIComponent(versionId)}/compile`, { method: "POST", body: JSON.stringify(arrays) }),
   validateReward: (config, robotId, taskId) => {

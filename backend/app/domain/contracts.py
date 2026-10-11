@@ -554,6 +554,7 @@ class MotionPipelineStage(ContractModel):
     duration_seconds: float | None = Field(default=None, ge=0)
     message: str | None = None
     error_code: str | None = None
+    artifacts: list[str] = Field(default_factory=list)
 
 
 class MotionPipelineRecord(ContractModel):
