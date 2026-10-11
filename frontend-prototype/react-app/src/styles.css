@@ -325,6 +325,11 @@ h1 { font-size: clamp(24px, 2.4vw, 33px); line-height: 1.1; letter-spacing: -.02
 .workflow-step small { color: #9aa6ad; font-size: 9px; }
 .workflow-connector { width: 18px; height: 1px; flex: 0 0 auto; background: #d9e0e4; }
 .workflow-connector.done { background: #73b594; }
+.next-action-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; margin: -7px 0 18px; padding: 11px 13px; border: 1px solid #cfe1ec; border-radius: 8px; background: linear-gradient(90deg, #f2f8fc, #fbfdfe); }
+.next-action-index { color: #3c7ca6; font-size: 9px; font-weight: 800; letter-spacing: .14em; }
+.next-action-copy { display: grid; gap: 2px; min-width: 0; }
+.next-action-copy strong { color: #31566d; font-size: 12px; }
+.next-action-copy span { overflow: hidden; color: #718895; font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .training-context { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; padding: 11px 13px; border: 1px solid #d6e2ea; border-radius: 7px; background: #f5f9fc; }
 .training-context > div:first-child { display: grid; gap: 2px; }
 .training-context strong { color: #2e526d; font-size: 13px; }
@@ -463,6 +468,8 @@ h1 { font-size: clamp(24px, 2.4vw, 33px); line-height: 1.1; letter-spacing: -.02
 @media (max-width: 680px) {
   .workflow-strip { margin-inline: -1px; padding: 8px; }
   .workflow-step { min-width: 102px; }
+  .next-action-card { grid-template-columns: auto minmax(0, 1fr); }
+  .next-action-card .button { grid-column: 2; justify-self: start; }
   .training-context { display: grid; gap: 8px; }
   .context-meta { flex-wrap: wrap; gap: 8px 12px; }
   .reward-footer, .artifact-footer { align-items: flex-start; flex-direction: column; }

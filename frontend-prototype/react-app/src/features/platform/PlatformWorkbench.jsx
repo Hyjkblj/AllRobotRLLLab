@@ -66,6 +66,10 @@ const RUN_STATUS_LABELS = {
 
 const DEFAULT_TERMINATIONS = ["timeout", "bad_anchor_orientation", "fall", "joint_limit", "nan_inf"];
 
+function assetKindLabel(kind) {
+  return kind === "video" ? "视频" : kind === "motion" ? "动作" : kind === "model" ? "模型" : kind || "资源";
+}
+
 function Badge({ children, tone = "neutral" }) {
   return <span className={`badge badge-${tone}`}>{children}</span>;
 }
@@ -109,6 +113,56 @@ function workflowStageForRun(run) {
   if (["TRAINING_PREPARING", "TRAINING", "TRAINING_SUCCEEDED", "EXPORTING"].includes(run.status)) return 2;
   if (["MOTION_COMPILING", "MOTION_READY"].includes(run.status)) return 1;
   return 0;
+}
+
+function NextAction({ view, selectedRun, projects, selectedProjectId, assets, onNavigate }) {
+  const readyMotion = assets.some((asset) => (asset.kind || asset.version?.kind) === "motion" && asset.version?.status === "READY" && /train_motion|TrainMotionNPZ/i.test(`${asset.version?.original_filename || ""} ${asset.display_name || ""}`));
+  let title = "先从项目资源开始";
+  let copy = "创建项目并上传视频，平台会在动作流水线中完成 GVHMR、GMR 和 TrainMotionNPZ 编译。";
+  let target = "assets";
+  let action = "管理资源";
+  if (!selectedProjectId || !projects.length) {
+    title = "创建第一个项目";
+    copy = "项目是视频、动作版本和训练 Run 的共同边界。";
+    target = "assets";
+    action = "创建项目";
+  } else if (view === "assets" || !assets.length) {
+    title = "上传视频或动作源";
+    copy = "视频会进入 GVHMR → GMR；已有 NPZ、CSV 或 PT 可直接进入动作编译。";
+    target = "assets";
+    action = "去上传";
+  } else if (!readyMotion) {
+    title = "把输入处理成 TrainMotionNPZ";
+    copy = "在动作流水线选择已登记的视频，确认目标机器人后提交处理并发布。";
+    target = "motion";
+    action = "打开动作流水线";
+  } else if (!selectedRun || ["FAILED", "CANCELLED"].includes(selectedRun.status)) {
+    title = "准备并提交训练 Run";
+    copy = "选择动作版本、奖励配置和训练参数，然后提交异步训练。";
+    target = "training";
+    action = "打开训练台";
+  } else if (selectedRun.status === "TRAINING_SUCCEEDED") {
+    title = "导出策略";
+    copy = "训练已完成，下一步生成 TorchScript 和 ONNX 策略包。";
+    target = "training";
+    action = "继续导出";
+  } else if (selectedRun.status === "EXPORTED") {
+    title = "运行三种子验收";
+    copy = "导出完成后运行 MuJoCo 三 seed 质量门，只有通过后才能下载。";
+    target = "training";
+    action = "开始验收";
+  } else if (selectedRun.status === "READY_TO_DOWNLOAD") {
+    title = "策略包已就绪";
+    copy = "验收已通过，可以查看报告并下载最终 artifact。";
+    target = "artifacts";
+    action = "查看策略包";
+  } else {
+    title = `Run 正在${RUN_STATUS_LABELS[selectedRun.status] || "处理中"}`;
+    copy = "状态和事件会自动刷新，完成后页面会提示下一步。";
+    target = "training";
+    action = "查看运行状态";
+  }
+  return <div className="next-action-card"><div className="next-action-index">NEXT</div><div className="next-action-copy"><strong>{title}</strong><span>{copy}</span></div><button className="button button-light" onClick={() => onNavigate(target)}>{action}<ArrowRight size={14} /></button></div>;
 }
 
 function WorkflowStrip({ view, selectedRun, onNavigate }) {
@@ -199,7 +253,7 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
         <div className="project-list compact">{projects.map((project) => <button className={`project-row ${project.project_id === selectedProjectId ? "selected" : ""}`} key={project.project_id} onClick={() => onSelectProject(project.project_id)}><span className="project-mark">{project.name?.slice(0, 1) || "P"}</span><span><strong>{project.name}</strong><small>{project.project_id}</small></span>{project.project_id === selectedProjectId && <Badge tone="blue">当前</Badge>}</button>)}</div>
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="UPLOAD" title="添加资源" />
-        <div className="upload-zone"><UploadCloud size={24} /><strong>{file ? file.name : "选择视频或动作文件"}</strong><small>{file ? formatBytes(file.size) : "MP4 · NPZ · CSV · PT"}</small><input type="file" accept=".mp4,.mov,.avi,.npz,.csv,.pt,.pkl" onChange={(event) => setFile(event.target.files?.[0] || null)} /></div>
+        <div className="upload-zone"><UploadCloud size={24} /><strong>{file ? file.name : "选择视频或动作文件"}</strong><small>{file ? formatBytes(file.size) : "MP4 · NPZ · CSV · PT"}</small><input type="file" accept=".mp4,.mov,.avi,.mkv,.webm,.npz,.csv,.pt,.pkl" onChange={(event) => { const nextFile = event.target.files?.[0] || null; setFile(nextFile); if (nextFile && /\.(mp4|mov|avi|mkv|webm)$/i.test(nextFile.name)) setKind("video"); else if (nextFile && /\.(npz|csv|pt|pkl)$/i.test(nextFile.name)) setKind("motion"); }} /></div>
         <div className="form-grid"><label>资源类型<select value={kind} onChange={(event) => setKind(event.target.value)}><option value="video">视频</option><option value="motion">动作</option><option value="model">模型</option></select></label><label>许可证<select value={license} onChange={(event) => setLicense(event.target.value)}><option value="declared">已声明</option><option value="research_only">研究用途</option><option value="internal">内部资产</option></select></label></div>
         <button className="button button-blue wide" onClick={upload} disabled={!selectedProjectId || !file || busy}>{busy ? <><LoaderCircle size={14} className="spin" /> 上传中 {progress}%</> : <><FileUp size={14} /> 上传并登记</>}</button>
         {!selectedProjectId && <small className="form-note">先选择项目空间</small>}
@@ -217,8 +271,9 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState(null);
   const [pipeline, setPipeline] = useState(null);
-  const motionAssets = assets.filter((asset) => (asset.kind || asset.version?.kind) === "motion");
-  const selectedAsset = motionAssets.find((asset) => asset.version?.asset_version_id === assetVersionId);
+  const sourceAssets = assets.filter((asset) => ["motion", "video"].includes(asset.kind || asset.version?.kind));
+  const selectedAsset = sourceAssets.find((asset) => asset.version?.asset_version_id === assetVersionId);
+  const selectedAssetKind = selectedAsset?.kind || selectedAsset?.version?.kind;
   const selectedAssetIsCompiled = /train_motion|TrainMotionNPZ/i.test(`${selectedAsset?.version?.original_filename || ""} ${selectedAsset?.display_name || ""}`);
   const selectedRobot = robots.find((item) => item.robot_id === selectedRobotId);
   const robotLabel = selectedRobot?.model || selectedRobot?.robot_id || "目标机器人";
@@ -268,22 +323,22 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
   const stageTone = (name) => stage(name)?.status === "SUCCEEDED" ? "green" : stage(name)?.status === "FAILED" ? "red" : stage(name)?.status === "RUNNING" ? "blue" : "silver";
 
   return <>
-    <SectionHeader eyebrow="MOTION PIPELINE" title="动作流水线" description="先完成输入校验，再进入 GVHMR → GMR → Motion Compiler。每次编辑都会生成新的 MotionEditConfig 版本。" action={<button className="button button-light" onClick={onOpenEditor}><Play size={14} /> 打开 MuJoCo 预览</button>} />
+    <SectionHeader eyebrow="STEP 2 · MOTION" title="把输入变成训练动作" description="视频会经过 GVHMR → GMR；已有轨迹文件可直接编译为 TrainMotionNPZ。" action={<button className="button button-light" onClick={onOpenEditor}><Play size={14} /> 打开 MuJoCo 预览</button>} />
     {localError && <ErrorBanner error={localError} onDismiss={() => setLocalError(null)} />}
     <div className="pipeline-track"><div className={`pipeline-step ${stageTone("detect")}`}><span>01</span><strong>检测</strong><small>Schema detector</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("retarget")}`}><span>02</span><strong>Retarget</strong><small>{robotLabel} trajectory</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("edit")}`}><span>03</span><strong>编辑</strong><small>Quality gate</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("compile")}`}><span>04</span><strong>编译</strong><small>TrainMotionNPZ</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("publish")}`}><span>05</span><strong>发布</strong><small>AssetVersion</small></div></div>
     <div className="pipeline-note"><Info size={15} /><span>本地模式支持已登记机器人的 NPZ、CSV、PT 直接轨迹转换；视频和人体姿态输入会根据运行时配置进入 GVHMR/GMR。</span></div>
     <div className="platform-columns">
       <section className="platform-panel"><SectionHeader eyebrow="DETECTOR" title="检测动作源" /><label className="target-robot-field">目标机器人<select value={selectedRobotId || ""} onChange={(event) => onRobotSelect?.(event.target.value)}><option value="">选择机器人</option>{robots.map((item) => <option key={item.robot_id} value={item.robot_id}>{item.model || item.robot_id} · {item.dof} DoF</option>)}</select></label>
-        <form className="stack-form" onSubmit={detect}><label>已登记动作<select value={assetVersionId} onChange={(event) => { setAssetVersionId(event.target.value); if (event.target.value) setPath(""); }}><option value="">选择 AssetVersion（推荐）</option>{motionAssets.map((asset) => <option key={asset.version.asset_version_id} value={asset.version.asset_version_id}>{asset.version.original_filename} · v{asset.version.version} · {asset.version.status}</option>)}</select></label><label>或服务器路径<input value={path} onChange={(event) => { setPath(event.target.value); if (event.target.value) setAssetVersionId(""); }} placeholder="/data/motions/walk.npz" /></label><button className="button button-blue" type="submit" disabled={busy || (!path.trim() && !assetVersionId)}>{busy ? <><LoaderCircle size={14} className="spin" /> 检测中</> : <><FileCheck2 size={14} /> 执行检测</>}</button></form>
+        <form className="stack-form" onSubmit={detect}><label>已登记输入<select value={assetVersionId} onChange={(event) => { setAssetVersionId(event.target.value); if (event.target.value) setPath(""); }}><option value="">选择视频或动作 AssetVersion</option>{sourceAssets.map((asset) => <option key={asset.version.asset_version_id} value={asset.version.asset_version_id}>{assetKindLabel(asset.kind || asset.version?.kind)} · {asset.version.original_filename} · v{asset.version.version} · {asset.version.status}</option>)}</select></label><label>或服务器路径<input value={path} onChange={(event) => { setPath(event.target.value); if (event.target.value) setAssetVersionId(""); }} placeholder="/data/motions/walk.npz 或 /data/video/walk.mp4" /></label><button className="button button-blue" type="submit" disabled={busy || (!path.trim() && !assetVersionId)}>{busy ? <><LoaderCircle size={14} className="spin" /> 检测中</> : <><FileCheck2 size={14} /> 执行检测</>}</button></form>
         {detection && <div className="detection-result"><div><Badge tone="green">VALID</Badge><strong>{detection.detected_type}</strong></div><span>{detection.file_format} · {detection.source_skeleton}</span><small>{detection.detector_version}</small></div>}
-        <div className="pipeline-submit"><div><span className="panel-kicker">COMPILE OUTPUT</span><strong>{selectedAssetIsCompiled ? "该资源已经是 TrainMotionNPZ" : selectedAsset?.version?.status === "READY" ? "选择 READY 资源后开始" : "等待资产校验"}</strong><small>{pipeline?.error_code ? `${pipeline.error_code} · ${pipeline.error_message}` : "输出会注册为新的 TrainMotionNPZ AssetVersion"}</small></div><button className="button button-dark" onClick={process} disabled={busy || !assetVersionId || selectedAssetIsCompiled || selectedAsset?.version?.status !== "READY" || ["QUEUED", "RUNNING"].includes(pipeline?.status)}>{busy ? <><LoaderCircle size={14} className="spin" /> 提交中</> : <><GitBranch size={14} /> 处理并发布</>}</button></div>
+        <div className="pipeline-submit"><div><span className="panel-kicker">STEP 3 · COMPILE</span><strong>{selectedAssetIsCompiled ? "该资源已经是 TrainMotionNPZ" : selectedAssetKind === "video" ? "视频将进入 GVHMR → GMR" : selectedAsset?.version?.status === "READY" ? "准备编译训练动作" : "先选择 READY 输入"}</strong><small>{pipeline?.error_code ? `${pipeline.error_code} · ${pipeline.error_message}` : "处理成功后会发布新的 TrainMotionNPZ AssetVersion"}</small></div><button className="button button-dark" onClick={process} disabled={busy || !assetVersionId || selectedAssetIsCompiled || selectedAsset?.version?.status !== "READY" || ["QUEUED", "RUNNING"].includes(pipeline?.status)}>{busy ? <><LoaderCircle size={14} className="spin" /> 提交中</> : <><GitBranch size={14} /> 处理并发布</>}</button></div>
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="RUNNER STATUS" title="处理器状态" />
         <div className="check-list"><div><span><Activity size={15} /> 内容检测</span><Badge tone={stageTone("detect")}>{stage("detect")?.status || "READY"}</Badge></div><div><span><GitBranch size={15} /> {robotLabel} Retarget</span><Badge tone={stageTone("retarget")}>{stage("retarget")?.status || "PENDING"}</Badge></div><div><span><ShieldCheck size={15} /> 质量门</span><Badge tone={stageTone("edit")}>{stage("edit")?.status || "PENDING"}</Badge></div><div><span><FileCheck2 size={15} /> Motion Compiler</span><Badge tone={stageTone("compile")}>{stage("compile")?.status || "PENDING"}</Badge></div></div>
         {pipeline?.quality && <div className="pipeline-quality"><Badge tone={pipeline.quality.status === "PASS" ? "green" : pipeline.quality.status === "BLOCKED" ? "red" : "amber"}>{pipeline.quality.status}</Badge><span>最大速度 {pipeline.quality.stats?.max_joint_velocity_rad_s?.toFixed?.(2) || "—"} rad/s</span><span>限位违规 {((pipeline.quality.stats?.joint_limit_violation_ratio || 0) * 100).toFixed(2)}%</span></div>}
       </section>
     </div>
-    <section className="platform-panel"><SectionHeader eyebrow="MOTION SOURCES" title="当前项目动作" />{motionAssets.length ? <div className="asset-table">{motionAssets.map((asset) => { const status = asset.version?.status || "UPLOADED"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.version?.asset_version_id || asset.asset_id}</small></span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{status}</Badge><button className="button button-light" onClick={onOpenEditor}>预览 <ArrowRight size={14} /></button></div>; })}</div> : <div className="empty-state">上传动作资源后显示在这里</div>}</section>
+    <section className="platform-panel"><SectionHeader eyebrow="MOTION SOURCES" title="当前项目输入" />{sourceAssets.length ? <div className="asset-table">{sourceAssets.map((asset) => { const status = asset.version?.status || "UPLOADED"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{assetKindLabel(asset.kind || asset.version?.kind)} · {asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.version?.asset_version_id || asset.asset_id}</small></span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{status}</Badge><button className="button button-light" onClick={onOpenEditor}>预览 <ArrowRight size={14} /></button></div>; })}</div> : <div className="empty-state">先在项目资源中上传视频或动作文件</div>}</section>
   </>;
 }
 
@@ -584,5 +639,5 @@ export default function PlatformWorkbench({ onOpenEditor }) {
     return <Overview health={health} infrastructure={infrastructure} projects={projects} robots={robots} robotCheck={robotCheck} runs={runs} onNavigate={(target, id) => { setView(target); if (id) selectRun({ run_id: id }); }} onRefresh={refresh} />;
   }, [assets, detection, health, infrastructure, loading, onOpenEditor, projects, refreshProject, rewardTemplates, robotCheck, robots, runs, selectedProjectId, selectedRobotId, selectedRun, tasks, view]);
 
-  return <div className="app-shell platform-shell"><aside className="rail"><div className="brand-mark">RL</div><div className="rail-line" />{NAV_ITEMS.map(({ id, icon: Icon, label }) => <button key={id} className={`rail-button ${view === id ? "active" : ""}`} title={label} aria-label={label} onClick={() => setView(id)}><Icon size={18} /></button>)}<div className="rail-spacer" /><button className="rail-button" title="MuJoCo 编辑器" aria-label="MuJoCo 编辑器" onClick={onOpenEditor}><Play size={18} /></button><button className="rail-button" title="设置" aria-label="设置"><Settings2 size={18} /></button><div className="rail-user" aria-label="当前用户">HY</div></aside><main className="main-shell"><header className="topbar"><div className="crumb"><span className="crumb-muted">AllRobotRLLLab</span><span className="crumb-divider">/</span><strong>{NAV_ITEMS.find((item) => item.id === view)?.label || "总览"}</strong></div><div className="top-actions"><div className={`service-state ${health?.status === "ok" ? "online" : "offline"}`}><span className="live-dot" /> {loading ? "连接中" : health?.status === "ok" ? "Platform API" : "服务离线"}</div><button className="button button-light" onClick={onOpenEditor}><Play size={14} /> MuJoCo 预览</button></div></header><div className="platform-content"><ErrorBanner error={error} onDismiss={() => setError(null)} /><WorkflowStrip view={view} selectedRun={selectedRun} onNavigate={setView} />{content}</div><footer className="statusbar"><div><span className="status-label">API</span><strong>{platformApi.baseUrl}</strong></div><div><span className="status-label">PROJECT</span><strong>{projects.find((item) => item.project_id === selectedProjectId)?.name || "未选择"}</strong></div><div className="status-spacer" /><div className="status-note"><CircleHelp size={14} /> Local File Mode · 后端事实源</div></footer></main></div>;
+  return <div className="app-shell platform-shell"><aside className="rail"><div className="brand-mark">RL</div><div className="rail-line" />{NAV_ITEMS.map(({ id, icon: Icon, label }) => <button key={id} className={`rail-button ${view === id ? "active" : ""}`} title={label} aria-label={label} onClick={() => setView(id)}><Icon size={18} /></button>)}<div className="rail-spacer" /><button className="rail-button" title="MuJoCo 编辑器" aria-label="MuJoCo 编辑器" onClick={onOpenEditor}><Play size={18} /></button><button className="rail-button" title="设置" aria-label="设置"><Settings2 size={18} /></button><div className="rail-user" aria-label="当前用户">HY</div></aside><main className="main-shell"><header className="topbar"><div className="crumb"><span className="crumb-muted">AllRobotRLLLab</span><span className="crumb-divider">/</span><strong>{NAV_ITEMS.find((item) => item.id === view)?.label || "总览"}</strong></div><div className="top-actions"><div className={`service-state ${health?.status === "ok" ? "online" : "offline"}`}><span className="live-dot" /> {loading ? "连接中" : health?.status === "ok" ? "Platform API" : "服务离线"}</div><button className="button button-light" onClick={onOpenEditor}><Play size={14} /> MuJoCo 预览</button></div></header><div className="platform-content"><ErrorBanner error={error} onDismiss={() => setError(null)} /><WorkflowStrip view={view} selectedRun={selectedRun} onNavigate={setView} /><NextAction view={view} selectedRun={selectedRun} projects={projects} selectedProjectId={selectedProjectId} assets={assets} onNavigate={setView} />{content}</div><footer className="statusbar"><div><span className="status-label">API</span><strong>{platformApi.baseUrl}</strong></div><div><span className="status-label">PROJECT</span><strong>{projects.find((item) => item.project_id === selectedProjectId)?.name || "未选择"}</strong></div><div className="status-spacer" /><div className="status-note"><CircleHelp size={14} /> Local File Mode · 后端事实源</div></footer></main></div>;
 }
