@@ -64,6 +64,33 @@ const RUN_STATUS_LABELS = {
   CANCELLED: "已取消"
 };
 
+const STATUS_LABELS = {
+  READY: "就绪", UPLOADED: "已上传", UPLOADING: "上传中", VALIDATING: "校验中",
+  REJECTED: "已拒绝", QUEUED: "排队中", RUNNING: "处理中", SUCCEEDED: "已完成",
+  FAILED: "失败", CANCELLED: "已取消", PENDING: "待处理", CREATED: "已创建",
+  CHECK: "待检查", MISSING: "缺失", SELECTED: "已选择", PASSED: "通过",
+  EXPORTED: "已导出", ACTIVE: "已启用", DISABLED: "已停用", LOADING: "加载中"
+};
+
+const STAGE_LABELS = { detect: "内容检测", retarget: "动作重定向", edit: "质量检查", compile: "动作编译", publish: "发布资源" };
+
+function statusLabel(status) {
+  return STATUS_LABELS[status] || RUN_STATUS_LABELS[status] || status || "未知";
+}
+
+function errorLabel(error) {
+  const code = error?.code || error?.error_code;
+  const messages = {
+    ASSET_NOT_READY: "资源仍在校验，请稍候刷新后再处理。",
+    ASSET_KIND_INVALID: "当前资源类型不支持此操作。",
+    INPUT_NOT_FOUND: "找不到输入文件，请检查路径。",
+    UNSUPPORTED_SOURCE_TYPE: "暂不支持该文件格式或内容。",
+    GVHMR_RUNTIME_UNAVAILABLE: "视频处理运行环境未就绪，请检查 GPU 服务。",
+    RETARGET_RUNTIME_UNAVAILABLE: "动作重定向运行环境未就绪，请检查 GMR 服务。"
+  };
+  return messages[code] || error?.message || String(error);
+}
+
 const DEFAULT_TERMINATIONS = ["timeout", "bad_anchor_orientation", "fall", "joint_limit", "nan_inf"];
 
 function assetKindLabel(kind) {
@@ -95,7 +122,7 @@ function statusTone(status) {
 
 function ErrorBanner({ error, onDismiss }) {
   if (!error) return null;
-  return <div className="platform-error" role="alert" aria-live="polite"><AlertTriangle size={16} /><span>{error.message || String(error)}</span><button className="icon-button small" title="关闭" aria-label="关闭错误提示" onClick={onDismiss}><X size={14} /></button></div>;
+  return <div className="platform-error" role="alert" aria-live="polite"><AlertTriangle size={16} /><span>{errorLabel(error)}</span><button className="icon-button small" title="关闭" aria-label="关闭错误提示" onClick={onDismiss}><X size={14} /></button></div>;
 }
 
 const WORKFLOW_STAGES = [
@@ -157,7 +184,7 @@ function NextAction({ view, selectedRun, projects, selectedProjectId, assets, on
     target = "artifacts";
     action = "查看策略包";
   } else {
-    title = `Run 正在${RUN_STATUS_LABELS[selectedRun.status] || "处理中"}`;
+    title = `训练任务正在${statusLabel(selectedRun.status)}`;
     copy = "状态和事件会自动刷新，完成后页面会提示下一步。";
     target = "training";
     action = "查看运行状态";
@@ -200,20 +227,20 @@ function Overview({ health, infrastructure, projects, robots, robotCheck, runs, 
     <SectionHeader eyebrow="PLATFORM CONTROL" title="训练工作台" description="从项目资源到可追溯 Run 的统一入口。" action={<button className="icon-button" title="刷新平台状态" onClick={onRefresh}><RefreshCw size={16} /></button>} />
     <div className="platform-stat-grid">
       <div className="stat-card"><div className="stat-icon blue"><ServerCog size={18} /></div><span>API 服务</span><strong>{health?.status === "ok" ? "在线" : "离线"}</strong><small>{health?.storage_mode || "未连接"}</small></div>
-      <div className="stat-card"><div className="stat-icon green"><Database size={18} /></div><span>存储模式</span><strong>{health?.storage_mode === "local_file" ? "Local File" : health?.storage_mode || "—"}</strong><small>{health?.runtime_root || "等待服务"}</small></div>
+      <div className="stat-card"><div className="stat-icon green"><Database size={18} /></div><span>存储模式</span><strong>{health?.storage_mode === "local_file" ? "本地文件" : health?.storage_mode || "—"}</strong><small>{health?.runtime_root || "等待服务"}</small></div>
       <div className="stat-card"><div className="stat-icon silver"><Box size={18} /></div><span>机器人适配器</span><strong>{robot?.model || robot?.robot_id || "—"}</strong><small>{robot ? `${robot.dof || robot.joints?.length || "—"} DoF` : "未加载"}</small></div>
-      <div className="stat-card"><div className="stat-icon amber"><Activity size={18} /></div><span>当前 Run</span><strong>{latestRun ? RUN_STATUS_LABELS[latestRun.status] || latestRun.status : "—"}</strong><small>{latestRun?.run_id ? latestRun.run_id.slice(0, 8) : "尚未创建"}</small></div>
+      <div className="stat-card"><div className="stat-icon amber"><Activity size={18} /></div><span>当前训练任务</span><strong>{latestRun ? statusLabel(latestRun.status) : "—"}</strong><small>{latestRun?.run_id ? latestRun.run_id.slice(0, 8) : "尚未创建"}</small></div>
     </div>
     <div className="platform-columns">
       <section className="platform-panel"><SectionHeader eyebrow="PROJECTS" title="项目" action={<button className="button button-light" onClick={() => onNavigate("assets")}><Plus size={14} /> 新建项目</button>} />
         {projects.length ? <div className="project-list">{projects.slice(0, 6).map((project) => <button className="project-row" key={project.project_id} onClick={() => onNavigate("assets", project.project_id)}><span className="project-mark">{project.name?.slice(0, 1) || "P"}</span><span><strong>{project.name}</strong><small>{project.project_id}</small></span><ArrowRight size={15} /></button>)}</div> : <div className="empty-state">还没有项目</div>}
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="RUNTIME" title="运行时检查" />
-        <div className="check-list"><div><span><ShieldCheck size={15} /> {robotLabel} 适配器</span><Badge tone={robotCheck?.valid ? "green" : robot ? "amber" : "red"}>{robotCheck?.valid ? "READY" : robot ? "CHECK" : "MISSING"}</Badge></div><div><span><Cpu size={15} /> GPU / worker</span><Badge tone={infrastructure?.status === "ok" ? "green" : "silver"}>{infrastructure?.status === "ok" ? "READY" : "PENDING"}</Badge></div><div><span><FileCheck2 size={15} /> 契约版本</span><Badge tone="green">v1</Badge></div></div>{robotCheck?.issues?.length > 0 && <div className="check-warning"><TriangleAlert size={14} /> {robotCheck.issues[0].message}</div>}
+        <div className="check-list"><div><span><ShieldCheck size={15} /> {robotLabel} 适配器</span><Badge tone={robotCheck?.valid ? "green" : robot ? "amber" : "red"}>{statusLabel(robotCheck?.valid ? "READY" : robot ? "CHECK" : "MISSING")}</Badge></div><div><span><Cpu size={15} /> GPU / 工作进程</span><Badge tone={infrastructure?.status === "ok" ? "green" : "silver"}>{statusLabel(infrastructure?.status === "ok" ? "READY" : "PENDING")}</Badge></div><div><span><FileCheck2 size={15} /> 契约版本</span><Badge tone="green">v1</Badge></div></div>{robotCheck?.issues?.length > 0 && <div className="check-warning"><TriangleAlert size={14} /> {robotCheck.issues[0].message}</div>}
       </section>
     </div>
     <section className="platform-panel run-summary"><SectionHeader eyebrow="RECENT RUNS" title="最近运行" action={<button className="button button-light" onClick={() => onNavigate("training")}>打开训练台 <ArrowRight size={14} /></button>} />
-      {runs.length ? <div className="run-table"><div className="run-table-head"><span>状态</span><span>Run</span><span>项目</span><span>更新时间</span></div>{runs.slice(0, 8).map((run) => <button className="run-table-row" key={run.run_id} onClick={() => onNavigate("training", run.run_id)}><Badge tone={statusTone(run.status)}>{RUN_STATUS_LABELS[run.status] || run.status}</Badge><code>{run.run_id.slice(0, 12)}</code><span>{projects.find((item) => item.project_id === run.project_id)?.name || run.project_id}</span><small>{dateLabel(run.updated_at)}</small></button>)}</div> : <div className="empty-state">创建项目后即可提交 Run</div>}
+      {runs.length ? <div className="run-table"><div className="run-table-head"><span>状态</span><span>运行任务</span><span>项目</span><span>更新时间</span></div>{runs.slice(0, 8).map((run) => <button className="run-table-row" key={run.run_id} onClick={() => onNavigate("training", run.run_id)}><Badge tone={statusTone(run.status)}>{statusLabel(run.status)}</Badge><code>{run.run_id.slice(0, 12)}</code><span>{projects.find((item) => item.project_id === run.project_id)?.name || run.project_id}</span><small>{dateLabel(run.updated_at)}</small></button>)}</div> : <div className="empty-state">创建项目后即可提交训练任务</div>}
     </section>
   </>;
 }
@@ -260,7 +287,7 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
       </section>
     </div>
     <section className="platform-panel"><SectionHeader eyebrow="ASSET VERSIONS" title="已登记资源" action={<button className="button button-light" onClick={() => onNavigate("motion")}><GitBranch size={14} /> 动作流水线</button>} />
-      {assets.length ? <div className="asset-table"><div className="asset-table-head"><span>文件</span><span>类型</span><span>版本</span><span>状态</span><span>SHA-256</span></div>{assets.map((asset) => { const status = asset.completed?.item?.status || asset.version?.status || "UPLOADED"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.asset_id || asset.version?.asset_id}</small></span><Badge tone="silver">{asset.kind || asset.version?.status || "asset"}</Badge><span>v{asset.version?.version || 1}</span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{status}</Badge><code>{asset.sha256 ? `${asset.sha256.slice(0, 12)}…` : asset.version?.sha256 ? `${asset.version.sha256.slice(0, 12)}…` : "pending"}</code></div>; })}</div> : <div className="empty-state">暂无资源</div>}
+          {assets.length ? <div className="asset-table"><div className="asset-table-head"><span>文件</span><span>类型</span><span>版本</span><span>状态</span><span>SHA-256</span></div>{assets.map((asset) => { const status = asset.completed?.item?.status || asset.version?.status || "UPLOADED"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.asset_id || asset.version?.asset_id}</small></span><Badge tone="silver">{assetKindLabel(asset.kind || asset.version?.kind)}</Badge><span>v{asset.version?.version || 1}</span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{statusLabel(status)}</Badge><code>{asset.sha256 ? `${asset.sha256.slice(0, 12)}…` : asset.version?.sha256 ? `${asset.version.sha256.slice(0, 12)}…` : "待生成"}</code></div>; })}</div> : <div className="empty-state">暂无资源</div>}
     </section>
   </>;
 }
@@ -325,7 +352,7 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
   return <>
     <SectionHeader eyebrow="STEP 2 · MOTION" title="把输入变成训练动作" description="视频会经过 GVHMR → GMR；已有轨迹文件可直接编译为 TrainMotionNPZ。" action={<button className="button button-light" onClick={onOpenEditor}><Play size={14} /> 打开 MuJoCo 预览</button>} />
     {localError && <ErrorBanner error={localError} onDismiss={() => setLocalError(null)} />}
-    <div className="pipeline-track"><div className={`pipeline-step ${stageTone("detect")}`}><span>01</span><strong>检测</strong><small>Schema detector</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("retarget")}`}><span>02</span><strong>Retarget</strong><small>{robotLabel} trajectory</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("edit")}`}><span>03</span><strong>编辑</strong><small>Quality gate</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("compile")}`}><span>04</span><strong>编译</strong><small>TrainMotionNPZ</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("publish")}`}><span>05</span><strong>发布</strong><small>AssetVersion</small></div></div>
+    <div className="pipeline-track"><div className={`pipeline-step ${stageTone("detect")}`}><span>01</span><strong>检测</strong><small>内容识别</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("retarget")}`}><span>02</span><strong>重定向</strong><small>{robotLabel} 动作</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("edit")}`}><span>03</span><strong>编辑</strong><small>质量检查</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("compile")}`}><span>04</span><strong>编译</strong><small>训练动作</small></div><ArrowRight size={17} /><div className={`pipeline-step ${stageTone("publish")}`}><span>05</span><strong>发布</strong><small>生成资源版本</small></div></div>
     <div className="pipeline-note"><Info size={15} /><span>本地模式支持已登记机器人的 NPZ、CSV、PT 直接轨迹转换；视频和人体姿态输入会根据运行时配置进入 GVHMR/GMR。</span></div>
     <div className="platform-columns">
       <section className="platform-panel"><SectionHeader eyebrow="DETECTOR" title="检测动作源" /><label className="target-robot-field">目标机器人<select value={selectedRobotId || ""} onChange={(event) => onRobotSelect?.(event.target.value)}><option value="">选择机器人</option>{robots.map((item) => <option key={item.robot_id} value={item.robot_id}>{item.model || item.robot_id} · {item.dof} DoF</option>)}</select></label>
@@ -334,11 +361,11 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
         <div className="pipeline-submit"><div><span className="panel-kicker">STEP 3 · COMPILE</span><strong>{selectedAssetIsCompiled ? "该资源已经是 TrainMotionNPZ" : selectedAssetKind === "video" ? "视频将进入 GVHMR → GMR" : selectedAsset?.version?.status === "READY" ? "准备编译训练动作" : "先选择 READY 输入"}</strong><small>{pipeline?.error_code ? `${pipeline.error_code} · ${pipeline.error_message}` : "处理成功后会发布新的 TrainMotionNPZ AssetVersion"}</small></div><button className="button button-dark" onClick={process} disabled={busy || !assetVersionId || selectedAssetIsCompiled || selectedAsset?.version?.status !== "READY" || ["QUEUED", "RUNNING"].includes(pipeline?.status)}>{busy ? <><LoaderCircle size={14} className="spin" /> 提交中</> : <><GitBranch size={14} /> 处理并发布</>}</button></div>
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="RUNNER STATUS" title="处理器状态" />
-        <div className="check-list"><div><span><Activity size={15} /> 内容检测</span><Badge tone={stageTone("detect")}>{stage("detect")?.status || "READY"}</Badge></div><div><span><GitBranch size={15} /> {robotLabel} Retarget</span><Badge tone={stageTone("retarget")}>{stage("retarget")?.status || "PENDING"}</Badge></div><div><span><ShieldCheck size={15} /> 质量门</span><Badge tone={stageTone("edit")}>{stage("edit")?.status || "PENDING"}</Badge></div><div><span><FileCheck2 size={15} /> Motion Compiler</span><Badge tone={stageTone("compile")}>{stage("compile")?.status || "PENDING"}</Badge></div></div>
+        <div className="check-list"><div><span><Activity size={15} /> 内容检测</span><Badge tone={stageTone("detect")}>{statusLabel(stage("detect")?.status || "READY")}</Badge></div><div><span><GitBranch size={15} /> {robotLabel} 动作重定向</span><Badge tone={stageTone("retarget")}>{statusLabel(stage("retarget")?.status || "PENDING")}</Badge></div><div><span><ShieldCheck size={15} /> 质量检查</span><Badge tone={stageTone("edit")}>{statusLabel(stage("edit")?.status || "PENDING")}</Badge></div><div><span><FileCheck2 size={15} /> 动作编译</span><Badge tone={stageTone("compile")}>{statusLabel(stage("compile")?.status || "PENDING")}</Badge></div></div>
         {pipeline?.quality && <div className="pipeline-quality"><Badge tone={pipeline.quality.status === "PASS" ? "green" : pipeline.quality.status === "BLOCKED" ? "red" : "amber"}>{pipeline.quality.status}</Badge><span>最大速度 {pipeline.quality.stats?.max_joint_velocity_rad_s?.toFixed?.(2) || "—"} rad/s</span><span>限位违规 {((pipeline.quality.stats?.joint_limit_violation_ratio || 0) * 100).toFixed(2)}%</span></div>}
       </section>
     </div>
-    <section className="platform-panel"><SectionHeader eyebrow="MOTION SOURCES" title="当前项目输入" />{sourceAssets.length ? <div className="asset-table">{sourceAssets.map((asset) => { const status = asset.version?.status || "UPLOADED"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{assetKindLabel(asset.kind || asset.version?.kind)} · {asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.version?.asset_version_id || asset.asset_id}</small></span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{status}</Badge><button className="button button-light" onClick={onOpenEditor}>预览 <ArrowRight size={14} /></button></div>; })}</div> : <div className="empty-state">先在项目资源中上传视频或动作文件</div>}</section>
+    <section className="platform-panel"><SectionHeader eyebrow="MOTION SOURCES" title="当前项目输入" />{sourceAssets.length ? <div className="asset-table">{sourceAssets.map((asset) => { const status = asset.version?.status || "UPLOADED"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{assetKindLabel(asset.kind || asset.version?.kind)} · {asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.version?.asset_version_id || asset.asset_id}</small></span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{statusLabel(status)}</Badge><button className="button button-light" onClick={onOpenEditor}>预览 <ArrowRight size={14} /></button></div>; })}</div> : <div className="empty-state">先在项目资源中上传视频或动作文件</div>}</section>
   </>;
 }
 
