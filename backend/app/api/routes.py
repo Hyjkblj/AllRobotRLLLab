@@ -622,18 +622,45 @@ def detect_motion(payload: MotionDetectRequest, request: Request) -> dict:
 
 
 @router.post("/motions/{asset_version_id}/process")
-def process_motion(asset_version_id: str, request: Request, payload: MotionProcessRequest | None = None) -> dict:
+def process_motion(asset_version_id: str, request: Request, payload: MotionProcessRequest | None = None, phase: str = Query(default="full")) -> dict:
     """Queue or synchronously execute the motion-to-TrainMotionNPZ pipeline."""
     execution_mode = _execution_mode(request)
     sync = execution_mode in {"sync", "sync_smoke"}
     try:
-        record, submission = motion_pipeline_service.submit(actor=_actor(request), asset_version_id=asset_version_id, edit_config=payload.edit_config if payload else None, sync=sync)
+        record, submission = motion_pipeline_service.submit(actor=_actor(request), asset_version_id=asset_version_id, edit_config=payload.edit_config if payload else None, sync=sync, phase=phase)
     except MotionPipelineError as exc:
         raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
     response = {"request_id": _request_id(request), "item": record.model_dump(mode="json"), "resource_version": record.updated_at}
     if submission is not None:
         response["submission"] = submission.model_dump(mode="json")
     return JSONResponse(status_code=200 if sync or submission is None else 202, content=response)
+
+
+@router.post("/motion-pipelines/{pipeline_id}/gvhmr")
+def start_gvhmr(pipeline_id: str, request: Request) -> dict:
+    try:
+        record, submission = motion_pipeline_service.enqueue_phase(actor=_actor(request), pipeline_id=pipeline_id, phase="gvhmr")
+    except MotionPipelineError as exc:
+        raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
+    return JSONResponse(status_code=202, content={"request_id": _request_id(request), "item": record.model_dump(mode="json"), "submission": submission.model_dump(mode="json")})
+
+
+@router.post("/motion-pipelines/{pipeline_id}/gmr")
+def start_gmr(pipeline_id: str, request: Request) -> dict:
+    try:
+        record, submission = motion_pipeline_service.enqueue_phase(actor=_actor(request), pipeline_id=pipeline_id, phase="gmr")
+    except MotionPipelineError as exc:
+        raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
+    return JSONResponse(status_code=202, content={"request_id": _request_id(request), "item": record.model_dump(mode="json"), "submission": submission.model_dump(mode="json")})
+
+
+@router.post("/motion-pipelines/{pipeline_id}/compile")
+def start_motion_compile(pipeline_id: str, request: Request) -> dict:
+    try:
+        record, submission = motion_pipeline_service.enqueue_phase(actor=_actor(request), pipeline_id=pipeline_id, phase="compile")
+    except MotionPipelineError as exc:
+        raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
+    return JSONResponse(status_code=202, content={"request_id": _request_id(request), "item": record.model_dump(mode="json"), "submission": submission.model_dump(mode="json")})
 
 
 @router.get("/motions/{asset_version_id}/pipeline")

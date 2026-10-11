@@ -159,7 +159,9 @@ class MotionPipelineService:
         self.gvhmr_runner = gvhmr_runner
         self.gmr_runner = gmr_runner
 
-    def submit(self, *, actor: Actor, asset_version_id: str, edit_config: MotionEditConfig | None = None, sync: bool = False) -> tuple[MotionPipelineRecord, TaskSubmission | None]:
+    def submit(self, *, actor: Actor, asset_version_id: str, edit_config: MotionEditConfig | None = None, sync: bool = False, phase: str = "full") -> tuple[MotionPipelineRecord, TaskSubmission | None]:
+        if phase not in {"full", "gvhmr", "gmr", "compile"}:
+            raise MotionPipelineError("MOTION_PHASE_INVALID", f"unsupported motion phase: {phase}")
         version, asset = self._asset_for_actor(asset_version_id, actor)
         if asset.kind not in {AssetKind.MOTION, AssetKind.VIDEO}:
             raise MotionPipelineError("ASSET_KIND_INVALID", "motion processing requires a motion or video asset", status_code=409)
@@ -190,21 +192,22 @@ class MotionPipelineService:
             updated_at=now,
         )
         self.store.save(record)
-        if sync:
+        if sync and phase == "full":
             return self.process(record.pipeline_id), None
         if self.task_dispatcher is None:
             raise MotionPipelineError("TASK_QUEUE_UNAVAILABLE", "motion worker queue is not configured", status_code=503)
-        payload = {"pipeline_id": record.pipeline_id, "asset_version_id": asset_version_id}
+        payload = {"pipeline_id": record.pipeline_id, "asset_version_id": asset_version_id, "phase": phase}
         queue = "motion-gpu" if asset.kind == AssetKind.VIDEO else "motion-cpu"
         key = hashlib.sha256(json.dumps(payload | {"edit_config": config.model_dump(mode="json")}, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         try:
-            task_id = self.task_dispatcher.enqueue(queue=queue, task="allrobotrl.motion.process", payload=payload, idempotency_key=key)
+            task_name = "allrobotrl.motion.process" if phase in {"full", "compile"} else f"allrobotrl.motion.{phase}"
+            task_id = self.task_dispatcher.enqueue(queue=queue, task=task_name, payload=payload, idempotency_key=key)
         except Exception as exc:
             self._fail(record, "TASK_QUEUE_UNAVAILABLE", str(exc))
             raise MotionPipelineError("TASK_QUEUE_UNAVAILABLE", str(exc), status_code=503) from exc
         record = record.model_copy(update={"task_id": task_id, "updated_at": utc_now()})
         self.store.save(record)
-        return record, TaskSubmission(task_id=task_id, run_id=record.pipeline_id, attempt_id=record.pipeline_id, operation="motion_process", queue=queue, idempotency_key=key)
+        return record, TaskSubmission(task_id=task_id, run_id=record.pipeline_id, attempt_id=record.pipeline_id, operation=f"motion_{phase}", queue=queue, idempotency_key=key)
 
     def get(self, *, actor: Actor, pipeline_id: str) -> MotionPipelineRecord:
         record = self.store.get(pipeline_id)
@@ -215,6 +218,26 @@ class MotionPipelineService:
         if member is None:
             raise MotionPipelineError("PROJECT_ACCESS_DENIED", "user is not a member of this project", status_code=403)
         return record
+
+    def enqueue_phase(self, *, actor: Actor, pipeline_id: str, phase: str) -> tuple[MotionPipelineRecord, TaskSubmission]:
+        record = self.get(actor=actor, pipeline_id=pipeline_id)
+        if phase == "gmr" and not record.gvhmr_output_path:
+            raise MotionPipelineError("GVHMR_CONFIRMATION_REQUIRED", "GVHMR must finish before GMR can start", status_code=409)
+        if phase == "compile" and not record.gmr_output_path:
+            raise MotionPipelineError("GMR_CONFIRMATION_REQUIRED", "GMR must finish before compilation can start", status_code=409)
+        if phase not in {"gvhmr", "gmr", "compile"}:
+            raise MotionPipelineError("MOTION_PHASE_INVALID", f"unsupported motion phase: {phase}")
+        queue = "motion-gpu" if phase in {"gvhmr", "gmr"} else "motion-cpu"
+        payload = {"pipeline_id": pipeline_id, "asset_version_id": record.source_asset_version_id, "phase": phase}
+        key = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        task_name = "allrobotrl.motion.process" if phase == "compile" else f"allrobotrl.motion.{phase}"
+        try:
+            task_id = self.task_dispatcher.enqueue(queue=queue, task=task_name, payload=payload, idempotency_key=key)
+        except Exception as exc:
+            raise MotionPipelineError("TASK_QUEUE_UNAVAILABLE", str(exc), status_code=503) from exc
+        updated = record.model_copy(update={"status": "QUEUED", "task_id": task_id, "updated_at": utc_now()})
+        self.store.save(updated)
+        return updated, TaskSubmission(task_id=task_id, run_id=pipeline_id, attempt_id=pipeline_id, operation=f"motion_{phase}", queue=queue, idempotency_key=key)
 
     def get_for_asset(self, *, actor: Actor, asset_version_id: str) -> MotionPipelineRecord | None:
         _version, _asset = self._asset_for_actor(asset_version_id, actor, minimum_viewer=True)
@@ -231,7 +254,7 @@ class MotionPipelineService:
         if version.status not in {AssetVersionStatus.VALIDATING, AssetVersionStatus.UPLOADED}:
             return version
         try:
-            path = self._resolve_source(version)
+            path = Path(record.gmr_output_path) if record.gmr_output_path else self._resolve_source(version)
             metadata = self.object_store.stat(version.object_key)
             if asset.kind == AssetKind.MOTION:
                 self.motion_registry.detect(path, asset_version_id=asset_version_id, trusted_pickle=False)
@@ -250,6 +273,55 @@ class MotionPipelineService:
         except Exception:
             return self.asset_service.mark_validated(asset_version_id=asset_version_id, valid=False, rejection_code="ASSET_OBJECT_UNAVAILABLE")
 
+    def process_gvhmr(self, pipeline_id: str) -> MotionPipelineRecord:
+        """Run only video→human-pose extraction and persist its artifact."""
+        record = self.store.get(pipeline_id)
+        if record is None:
+            raise MotionPipelineError("MOTION_PIPELINE_NOT_FOUND", f"motion pipeline not found: {pipeline_id}", status_code=404)
+        if record.gvhmr_output_path:
+            return record
+        version, _asset = self._asset_without_actor(record.source_asset_version_id)
+        if version.status != AssetVersionStatus.READY:
+            raise MotionPipelineError("ASSET_NOT_READY", f"asset version must be READY, got {version.status}", status_code=409)
+        if self.gvhmr_runner is None:
+            raise MotionPipelineError("GVHMR_RUNTIME_UNAVAILABLE", "GVHMR runtime is not configured", status_code=503)
+        source = self._resolve_source(version)
+        if source.suffix.lower() not in {".mp4", ".mov", ".mkv", ".avi", ".webm"}:
+            raise MotionPipelineError("INPUT_NOT_VIDEO", "GVHMR stage requires a video input", status_code=409)
+        record = self._stage(record, "detect", "RUNNING", message="GVHMR 正在提取人体姿态")
+        try:
+            output_dir = (self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gvhmr"
+            output, _ = self.gvhmr_runner.run(video_path=source, output_dir=output_dir)
+            validate = getattr(self.gvhmr_runner, "validate_output", None)
+            if callable(validate):
+                validate(output)
+            record = self._stage(record, "detect", "SUCCEEDED", message="GVHMR 输出格式校验通过", gvhmr_output_path=str(output), status="GVHMR_READY", artifacts=self._visual_artifacts(output_dir))
+            return record
+        except RunnerError as exc:
+            return self._fail(record, exc.code, exc.message)
+
+    def process_gmr(self, pipeline_id: str) -> MotionPipelineRecord:
+        """Run only human-pose→robot retargeting after GVHMR confirmation."""
+        record = self.store.get(pipeline_id)
+        if record is None:
+            raise MotionPipelineError("MOTION_PIPELINE_NOT_FOUND", f"motion pipeline not found: {pipeline_id}", status_code=404)
+        if record.gmr_output_path:
+            return record
+        if not record.gvhmr_output_path:
+            raise MotionPipelineError("GVHMR_CONFIRMATION_REQUIRED", "GVHMR must finish before GMR can start", status_code=409)
+        if self.gmr_runner is None:
+            raise MotionPipelineError("GMR_RUNTIME_UNAVAILABLE", "GMR runtime is not configured", status_code=503)
+        version, asset = self._asset_without_actor(record.source_asset_version_id)
+        adapter = self.robot_registry.get(record.edit_config.robot_id if record.edit_config else None)
+        record = self._stage(record, "retarget", "RUNNING", message="GMR 正在执行机器人动作重定向")
+        try:
+            output_dir = (self.store.root or Path(tempfile.gettempdir())) / "external" / record.pipeline_id / "gmr"
+            output, _ = self.gmr_runner.run(source_path=Path(record.gvhmr_output_path), output_dir=output_dir, robot=getattr(adapter, "gmr_robot", adapter.name), target_dof=adapter.get_spec().dof)
+            record = self._stage(record, "retarget", "SUCCEEDED", message="GMR 输出格式校验通过", gmr_output_path=str(output), status="GMR_READY", artifacts=self._visual_artifacts(output_dir))
+            return record
+        except RunnerError as exc:
+            return self._fail(record, exc.code, exc.message)
+
     def process(self, pipeline_id: str) -> MotionPipelineRecord:
         record = self.store.get(pipeline_id)
         if record is None:
@@ -267,7 +339,7 @@ class MotionPipelineService:
                 raise MotionPipelineError("ASSET_NOT_READY", f"asset version must be READY, got {version.status}", status_code=409)
             path = self._resolve_source(version)
             record = self._stage(record, "detect", "RUNNING")
-            generated_retarget = None
+            generated_retarget = Path(record.gmr_output_path) if record.gmr_output_path else None
             try:
                 descriptor = self.motion_registry.detect(path, asset_version_id=version.asset_version_id, trusted_pickle=False, target_dof=adapter.get_spec().dof, robot_id=adapter.name)
             except MotionDetectionError:

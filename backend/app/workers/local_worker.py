@@ -109,6 +109,10 @@ def _operation_for_task(task: str) -> str:
         return "asset_uploading"
     if task == "allrobotrl.motion.process" or value == "process":
         return "motion_process"
+    if task == "allrobotrl.motion.gvhmr" or value == "gvhmr":
+        return "motion_gvhmr"
+    if task == "allrobotrl.motion.gmr" or value == "gmr":
+        return "motion_gmr"
     if task in {"runs.created", "allrobotrl.runs.created"}:
         return "run_validate"
     if task in {"runs.retry", "allrobotrl.runs.retry"}:

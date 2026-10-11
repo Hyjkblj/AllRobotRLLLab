@@ -564,7 +564,7 @@ class MotionPipelineRecord(ContractModel):
     pipeline_id: str = Field(min_length=1)
     project_id: str = Field(min_length=1)
     source_asset_version_id: str = Field(min_length=1)
-    status: Literal["QUEUED", "RUNNING", "READY", "FAILED"] = "QUEUED"
+    status: Literal["QUEUED", "RUNNING", "GVHMR_READY", "GMR_READY", "READY", "FAILED"] = "QUEUED"
     stages: list[MotionPipelineStage] = Field(min_length=1)
     source_descriptor: SourceMotionDescriptor | None = None
     edit_config: MotionEditConfig | None = None
@@ -572,6 +572,8 @@ class MotionPipelineRecord(ContractModel):
     train_motion: TrainMotionNPZ | None = None
     output_asset_version_id: str | None = None
     output_object_key: str | None = None
+    gvhmr_output_path: str | None = None
+    gmr_output_path: str | None = None
     quality: MotionQualityReport | None = None
     task_id: str | None = None
     error_code: str | None = None

@@ -70,6 +70,12 @@ class P3TaskExecutor:
                 raise RuntimeError("motion pipeline service is not configured")
             record = self.motion_pipeline_service.process(str(payload["pipeline_id"]))
             return {"operation": operation, "pipeline_id": record.pipeline_id, "status": record.status, "output_asset_version_id": record.output_asset_version_id, "error_code": record.error_code}
+        if operation in {"motion_gvhmr", "motion_gmr"}:
+            if self.motion_pipeline_service is None:
+                raise RuntimeError("motion pipeline service is not configured")
+            method = self.motion_pipeline_service.process_gvhmr if operation == "motion_gvhmr" else self.motion_pipeline_service.process_gmr
+            record = method(str(payload["pipeline_id"]))
+            return {"operation": operation, "pipeline_id": record.pipeline_id, "status": record.status, "error_code": record.error_code}
         if operation in {"run_validate", "asset_uploading", "cancelled"}:
             terminated = False
             if operation == "cancelled" and run_id:
@@ -139,6 +145,14 @@ def register_p3_tasks(celery_app, executor: P3TaskExecutor) -> None:
     @celery_app.task(name="allrobotrl.motion.process")
     def motion_process(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
         return executor.execute({**payload, "operation": "motion_process"})
+
+    @celery_app.task(name="allrobotrl.motion.gvhmr")
+    def motion_gvhmr(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "motion_gvhmr"})
+
+    @celery_app.task(name="allrobotrl.motion.gmr")
+    def motion_gmr(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "motion_gmr"})
 
     @celery_app.task(name="allrobotrl.assets.validate")
     def asset_validate(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
