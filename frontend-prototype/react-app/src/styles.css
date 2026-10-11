@@ -408,6 +408,10 @@ h1 { font-size: clamp(24px, 2.4vw, 33px); line-height: 1.1; letter-spacing: -.02
 .artifact-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; color: #86969d; font-size: 9px; }
 .artifact-footer span { display: inline-flex; align-items: center; gap: 5px; }
 .pipeline-note { display: flex; align-items: flex-start; gap: 8px; margin: -2px 0 14px; padding: 10px 12px; border: 1px solid #dce7ee; border-radius: 7px; color: #668198; background: #f3f8fb; font-size: 10px; line-height: 1.55; }
+.pipeline-visuals { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.pipeline-visuals > div { display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
+.pipeline-visuals strong { color: var(--ink); font-size: 11px; }
+.pipeline-visuals small { color: var(--muted); font-size: 10px; }
 
 @media (max-width: 900px) {
   .platform-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
