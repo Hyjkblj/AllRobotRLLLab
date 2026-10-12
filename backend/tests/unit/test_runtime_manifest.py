@@ -3,6 +3,7 @@ from pathlib import Path
 
 from backend.app.application.manifest_service import load_runtime_versions
 from backend.app.runtime.registry import RuntimeRegistry
+from backend.app.runtime.contracts import RuntimeCheck
 
 
 def test_runtime_manifest_maps_external_identities(tmp_path) -> None:
@@ -42,3 +43,14 @@ def test_runtime_doctor_native_g1_profile_requires_training_urdf(tmp_path, monke
     report = registry.doctor(profile="native-isaac-gpu")
     assert report["status"] == "NOT_READY"
     assert any(item.get("name") == "g1_isaac_urdf" for item in report["failures"])
+
+
+def test_runtime_manifest_git_source_with_null_content_hash_is_current(tmp_path) -> None:
+    runtime = tmp_path / "gmr"
+    runtime.mkdir()
+    (runtime / "source.py").write_text("print('ready')\n", encoding="utf-8")
+    check = RuntimeCheck(name="gmr", configured=True, available=True, path=str(runtime), revision="abc123")
+    registry = RuntimeRegistry()
+    manifest = {"external": {"gmr": {"git_sha": "abc123", "source_sha256": None}}}
+
+    assert registry._manifest_drift(manifest, [check]) == []

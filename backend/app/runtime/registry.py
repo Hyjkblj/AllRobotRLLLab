@@ -186,7 +186,10 @@ class RuntimeRegistry:
             expected = str(item.get("git_sha", "")).strip()
             if expected and check.revision and check.revision != expected and not check.revision.startswith(expected):
                 errors.append(f"{check.name} revision differs from collected manifest: expected {expected}, got {check.revision}")
-            expected_source = str(item.get("source_sha256", "")).strip()
+            # Git-backed sources are identified by git_sha; the collector
+            # records source_sha256 as JSON null in that case.
+            expected_source = item.get("source_sha256")
+            expected_source = expected_source.strip() if isinstance(expected_source, str) else ""
             if expected_source and check.path:
                 try:
                     current_source = self._source_hash(Path(check.path))
