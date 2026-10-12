@@ -9,7 +9,9 @@ from backend.app.runtime.mujoco_kinematics import MuJoCoKinematicsCompiler
 from backend.app.runtime.registry import RuntimeRegistry
 
 
-def test_runtime_registry_registers_embedded_source_by_content_hash(tmp_path: Path) -> None:
+def test_runtime_registry_registers_embedded_source_by_content_hash(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GMR_PATH", raising=False)
+    monkeypatch.delenv("GMR_PYTHON", raising=False)
     runtime = tmp_path / "gmr"
     runtime.mkdir()
     (runtime / "README.md").write_text("fixture", encoding="utf-8")
@@ -21,6 +23,8 @@ def test_runtime_registry_registers_embedded_source_by_content_hash(tmp_path: Pa
 
 
 def test_runtime_registry_accepts_path_or_path_command_for_python(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GMR_PATH", raising=False)
+    monkeypatch.delenv("GMR_PYTHON", raising=False)
     runtime = tmp_path / "gmr"
     runtime.mkdir()
     registry = RuntimeRegistry(registration_path=tmp_path / "registrations.json")
@@ -48,6 +52,8 @@ def test_runtime_registry_rejects_invalid_python_before_persisting(tmp_path: Pat
 
 
 def test_gmr_runner_normalizes_fixture_output(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("GMR_PATH", raising=False)
+    monkeypatch.delenv("GMR_PYTHON", raising=False)
     runtime = tmp_path / "gmr"
     runtime.mkdir()
     registration = tmp_path / "registrations.json"
