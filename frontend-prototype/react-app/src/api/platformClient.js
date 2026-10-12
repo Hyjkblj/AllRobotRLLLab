@@ -60,6 +60,7 @@ export const platformApi = {
   listProjectAssets: (projectId) => request(`/projects/${encodeURIComponent(projectId)}/assets`),
   listProjectRuns: (projectId) => request(`/projects/${encodeURIComponent(projectId)}/runs`),
   createProject: (name) => request("/projects", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteProject: (projectId) => request(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" }),
   listRobots: () => request("/robots"),
   listTasks: (robotId) => request(`/tasks${robotId ? `?robot_id=${encodeURIComponent(robotId)}` : ""}`),
   robotSelfCheck: (robotId) => request(`/robots/${encodeURIComponent(robotId)}/self-check`),

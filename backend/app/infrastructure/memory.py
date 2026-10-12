@@ -49,10 +49,17 @@ class InMemoryProjectRepository:
         with self._lock:
             return self._projects.get(project_id)
 
+    def update(self, project: ProjectRecord) -> ProjectRecord:
+        with self._lock:
+            if project.project_id not in self._projects:
+                raise KeyError(f"project not found: {project.project_id}")
+            self._projects[project.project_id] = project
+            return project
+
     def list_for_user(self, user_id: str) -> list[ProjectRecord]:
         with self._lock:
             project_ids = {project_id for project_id, member_user_id in self._members if member_user_id == user_id}
-            return [project for project in self._projects.values() if project.project_id in project_ids]
+            return [project for project in self._projects.values() if project.project_id in project_ids and project.status.value != "DELETED"]
 
     def member(self, project_id: str, user_id: str) -> ProjectMember | None:
         with self._lock:

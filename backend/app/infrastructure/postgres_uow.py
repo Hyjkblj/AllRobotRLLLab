@@ -108,9 +108,16 @@ class PostgresProjectRepository(_Repository):
             row = cursor.fetchone()
         return _project(row) if row else None
 
+    def update(self, project: ProjectRecord) -> ProjectRecord:
+        with self.connection.cursor() as cursor:
+            cursor.execute("update projects set status=%s, updated_at=%s where id=%s", (project.status.value, project.updated_at, _uuid(project.project_id)))
+            if cursor.rowcount != 1:
+                raise KeyError(f"project not found: {project.project_id}")
+        return project
+
     def list_for_user(self, user_id: str) -> list[ProjectRecord]:
         with self.connection.cursor(row_factory=dict_row) as cursor:
-            cursor.execute("select p.*, u.external_id as owner_external_id from projects p join project_members pm on pm.project_id=p.id join users m on m.id=pm.user_id join users u on u.id=p.owner_id where m.external_id=%s order by p.updated_at desc", (user_id,))
+            cursor.execute("select p.*, u.external_id as owner_external_id from projects p join project_members pm on pm.project_id=p.id join users m on m.id=pm.user_id join users u on u.id=p.owner_id where m.external_id=%s and p.status <> 'DELETED' order by p.updated_at desc", (user_id,))
             return [_project(row) for row in cursor.fetchall()]
 
     def member(self, project_id: str, user_id: str) -> ProjectMember | None:

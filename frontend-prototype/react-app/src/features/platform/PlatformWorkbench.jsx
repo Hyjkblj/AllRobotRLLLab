@@ -246,7 +246,7 @@ function Overview({ health, infrastructure, projects, robots, robotCheck, runs, 
   </>;
 }
 
-function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated, onAssetCreated, assets, onNavigate, onAssetDeleted }) {
+function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated, onAssetCreated, assets, onNavigate, onAssetDeleted, onProjectDeleted }) {
   const [projectName, setProjectName] = useState("");
   const [file, setFile] = useState(null);
   const [kind, setKind] = useState("motion");
@@ -280,6 +280,14 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
     catch (error) { setLocalError(error); }
     finally { setBusy(false); }
   };
+  const removeProject = async () => {
+    const project = projects.find((item) => item.project_id === selectedProjectId);
+    if (!project || !window.confirm(`确认删除项目“${project.name}”？项目将被归档并从列表中隐藏。`)) return;
+    setBusy(true); setLocalError(null);
+    try { await platformApi.deleteProject(project.project_id); onProjectDeleted?.(project.project_id); }
+    catch (error) { setLocalError(error); }
+    finally { setBusy(false); }
+  };
 
   return <>
     <SectionHeader eyebrow="PROJECTS & ASSETS" title="项目与资源" description="资产进入校验状态后，才可用于动作编译和训练。" />
@@ -287,7 +295,7 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
     <div className="platform-columns assets-columns">
       <section className="platform-panel"><SectionHeader eyebrow="PROJECT" title="项目空间" />
         <form className="inline-form" onSubmit={createProject}><input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="项目名称" maxLength={120} /><button className="button button-dark" type="submit" disabled={busy || !projectName.trim()}><Plus size={14} /> 创建</button></form>
-        <div className="project-list compact">{projects.map((project) => <button className={`project-row ${project.project_id === selectedProjectId ? "selected" : ""}`} key={project.project_id} onClick={() => onSelectProject(project.project_id)}><span className="project-mark">{project.name?.slice(0, 1) || "P"}</span><span><strong>{project.name}</strong><small>{project.project_id}</small></span>{project.project_id === selectedProjectId && <Badge tone="blue">当前</Badge>}</button>)}</div>
+        <div className="project-list compact">{projects.map((project) => <button className={`project-row ${project.project_id === selectedProjectId ? "selected" : ""}`} key={project.project_id} onClick={() => onSelectProject(project.project_id)}><span className="project-mark">{project.name?.slice(0, 1) || "P"}</span><span><strong>{project.name}</strong><small>{project.project_id}</small></span>{project.project_id === selectedProjectId && <><Badge tone="blue">当前</Badge><span role="button" tabIndex={0} className="project-delete" onClick={(event) => { event.stopPropagation(); removeProject(); }}>删除</span></>}</button>)}</div>
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="UPLOAD" title="添加资源" />
         <div className="upload-zone"><UploadCloud size={24} /><strong>{file ? file.name : "选择视频或动作文件"}</strong><small>{file ? formatBytes(file.size) : "MP4 · NPZ · CSV · PT"}</small><input type="file" accept=".mp4,.mov,.avi,.mkv,.webm,.npz,.csv,.pt,.pkl" onChange={(event) => { const nextFile = event.target.files?.[0] || null; setFile(nextFile); if (nextFile && /\.(mp4|mov|avi|mkv|webm)$/i.test(nextFile.name)) setKind("video"); else if (nextFile && /\.(npz|csv|pt|pkl)$/i.test(nextFile.name)) setKind("motion"); }} /></div>
@@ -488,7 +496,17 @@ function Training({ projects, selectedProjectId, assets, robots, tasks, selected
     finally { setBusy(false); }
   };
 
-  const refreshSelected = async () => { if (!selectedRun?.run_id) return; try { onRunSelect(await platformApi.getRun(selectedRun.run_id)); } catch (error) { setLocalError(error); } };
+  const refreshSelected = async () => {
+    if (!selectedRun?.run_id) return;
+    try {
+      onRunSelect(await platformApi.getRun(selectedRun.run_id));
+    } catch (error) {
+      if (error?.status === 404 || error?.code === "RUN_NOT_FOUND") {
+        setSelectedRun(null);
+        setLocalError({ message: "该 Run 已不存在，请从当前项目重新选择运行任务。" });
+      } else setLocalError(error);
+    }
+  };
 
   const submitStage = async (operation) => {
     if (!selectedRun?.run_id) return;
@@ -668,6 +686,12 @@ export default function PlatformWorkbench({ onOpenEditor }) {
     } catch (loadError) { setError(loadError); }
   };
 
+  useEffect(() => {
+    if (!selectedProjectId || !assets.some((asset) => ["UPLOADING", "VALIDATING"].includes(asset.version?.status))) return undefined;
+    const timer = window.setInterval(refreshProject, 2000);
+    return () => window.clearInterval(timer);
+  }, [selectedProjectId, assets]);
+
   const createProject = (project) => { setProjects((current) => [project, ...current.filter((item) => item.project_id !== project.project_id)]); setSelectedProjectId(project.project_id); };
   const addAsset = (asset) => {
     const normalized = asset.item ? { ...asset.item, version: asset.version, completed: asset.completed, sha256: asset.sha256 } : asset;
@@ -676,11 +700,31 @@ export default function PlatformWorkbench({ onOpenEditor }) {
   const deleteAsset = (assetVersionId) => {
     setAssets((current) => current.filter((item) => item.version?.asset_version_id !== assetVersionId));
   };
+  const deleteProject = (projectId) => {
+    setProjects((current) => current.filter((item) => item.project_id !== projectId));
+    if (selectedProjectId === projectId) {
+      setSelectedProjectId("");
+      setAssets([]);
+      setRuns([]);
+      setSelectedRun(null);
+    }
+  };
   const addRun = (run) => { setRuns((current) => [run, ...current.filter((item) => item.run_id !== run.run_id)]); setSelectedRun(run); setView("training"); };
-  const selectRun = async (run) => { if (run?.item) { setSelectedRun(run.item); return; } setSelectedRun(run); try { setSelectedRun((await platformApi.getRun(run.run_id)).item); } catch (loadError) { setError(loadError); } };
+  const selectRun = async (run) => {
+    if (run?.item) { setSelectedRun(run.item); return; }
+    setSelectedRun(run);
+    try {
+      setSelectedRun((await platformApi.getRun(run.run_id)).item);
+    } catch (loadError) {
+      if (loadError?.status === 404 || loadError?.code === "RUN_NOT_FOUND") {
+        setSelectedRun(null);
+        setError({ message: "该 Run 已不存在，请从当前项目重新选择运行任务。" });
+      } else setError(loadError);
+    }
+  };
 
   const content = useMemo(() => {
-    if (view === "assets") return <Assets projects={projects} selectedProjectId={selectedProjectId} onSelectProject={setSelectedProjectId} onProjectCreated={createProject} onAssetCreated={addAsset} onAssetDeleted={deleteAsset} assets={assets} onNavigate={(target) => setView(target)} />;
+    if (view === "assets") return <Assets projects={projects} selectedProjectId={selectedProjectId} onSelectProject={setSelectedProjectId} onProjectCreated={createProject} onAssetCreated={addAsset} onAssetDeleted={deleteAsset} onProjectDeleted={deleteProject} assets={assets} onNavigate={(target) => setView(target)} />;
     if (view === "motion") return <MotionPipeline assets={assets} robots={robots} selectedRobotId={selectedRobotId} onRobotSelect={setSelectedRobotId} detection={detection} onDetect={setDetection} onOpenEditor={onOpenEditor} onRefresh={refreshProject} />;
     if (view === "training") return <Training projects={projects} selectedProjectId={selectedProjectId} assets={assets} robots={robots} tasks={tasks} selectedRobotId={selectedRobotId} onRobotSelect={setSelectedRobotId} rewardTemplates={rewardTemplates} runs={runs} selectedRun={selectedRun} onRunCreated={addRun} onRunSelect={selectRun} onRefresh={refresh} onProjectRefresh={refreshProject} />;
     if (view === "sim2sim") return <Sim2SimView runs={runs} robots={robots} selectedRun={selectedRun} onRunSelect={selectRun} onNavigate={setView} />;

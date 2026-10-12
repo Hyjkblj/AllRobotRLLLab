@@ -388,6 +388,15 @@ def get_project(project_id: str, request: Request) -> dict:
     return {"request_id": _request_id(request), "item": project.model_dump(mode="json"), "members": [member.model_dump(mode="json") for member in members], "resource_version": project.updated_at}
 
 
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str, request: Request) -> dict:
+    try:
+        project = run_service.delete_project(project_id=project_id, actor=_actor(request))
+    except RunServiceError as exc:
+        raise _service_error(request, exc) from exc
+    return {"request_id": _request_id(request), "deleted": True, "item": project.model_dump(mode="json"), "resource_version": project.updated_at}
+
+
 @router.get("/projects/{project_id}/assets")
 def list_project_assets(project_id: str, request: Request) -> dict:
     try:

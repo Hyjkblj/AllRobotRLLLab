@@ -66,6 +66,17 @@ class RunService:
         with self.uow:
             return self.uow.projects.list_for_user(actor.user_id)
 
+    def delete_project(self, *, project_id: str, actor: Actor) -> ProjectRecord:
+        with self.uow:
+            project = self._project_or_error(project_id)
+            self._require_member(project_id, actor.user_id, ProjectRole.OWNER)
+            if project.status.value == "DELETED":
+                return project
+            deleted = project.model_copy(update={"status": "DELETED", "updated_at": utc_now()})
+            self.uow.projects.update(deleted)
+            self._audit(actor, project_id, "project.deleted", "project", project_id, {})
+            return deleted
+
     def list_runs(self, *, actor: Actor, project_id: str) -> list[RunRecord]:
         with self.uow:
             self._project_or_error(project_id)
