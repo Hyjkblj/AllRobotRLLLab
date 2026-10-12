@@ -190,7 +190,11 @@ class RuntimeRegistry:
             # records source_sha256 as JSON null in that case.
             expected_source = item.get("source_sha256")
             expected_source = expected_source.strip() if isinstance(expected_source, str) else ""
-            if expected_source and check.path:
+            # Isaac Sim is commonly registered as a Conda site-packages
+            # directory. Its startup/cache files are mutable and are not a
+            # stable source identity; package availability/version is checked
+            # separately, so do not reject a manifest for this hash drift.
+            if expected_source and check.path and check.name != "isaac_sim":
                 try:
                     current_source = self._source_hash(Path(check.path))
                 except OSError:
