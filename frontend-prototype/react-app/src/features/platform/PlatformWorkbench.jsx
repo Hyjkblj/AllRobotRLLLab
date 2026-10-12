@@ -320,7 +320,10 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
   }, [assetVersionId]);
 
   useEffect(() => {
-    if (!pipeline?.pipeline_id || ["READY", "FAILED"].includes(pipeline.status)) return undefined;
+    // A stage-ready state is a user confirmation gate. Stop polling until the
+    // user explicitly starts the next stage; this avoids needless GET traffic
+    // while preserving polling for queued/running work.
+    if (!pipeline?.pipeline_id || ["GVHMR_READY", "GMR_READY", "READY", "FAILED"].includes(pipeline.status)) return undefined;
     let cancelled = false;
     const timer = window.setInterval(() => {
       platformApi.getMotionPipelineById(pipeline.pipeline_id).then((result) => {

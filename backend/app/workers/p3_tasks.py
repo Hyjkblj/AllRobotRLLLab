@@ -68,7 +68,11 @@ class P3TaskExecutor:
         if operation == "motion_process":
             if self.motion_pipeline_service is None:
                 raise RuntimeError("motion pipeline service is not configured")
-            record = self.motion_pipeline_service.process(str(payload["pipeline_id"]))
+            phase = str(payload.get("phase", "full")).lower()
+            if phase == "compile":
+                record = self.motion_pipeline_service.process_compile(str(payload["pipeline_id"]))
+            else:
+                record = self.motion_pipeline_service.process(str(payload["pipeline_id"]))
             return {"operation": operation, "pipeline_id": record.pipeline_id, "status": record.status, "output_asset_version_id": record.output_asset_version_id, "error_code": record.error_code}
         if operation in {"motion_gvhmr", "motion_gmr"}:
             if self.motion_pipeline_service is None:

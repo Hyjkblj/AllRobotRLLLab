@@ -254,7 +254,7 @@ class MotionPipelineService:
         if version.status not in {AssetVersionStatus.VALIDATING, AssetVersionStatus.UPLOADED}:
             return version
         try:
-            path = Path(record.gmr_output_path) if record.gmr_output_path else self._resolve_source(version)
+            path = self._resolve_source(version)
             metadata = self.object_store.stat(version.object_key)
             if asset.kind == AssetKind.MOTION:
                 self.motion_registry.detect(path, asset_version_id=asset_version_id, trusted_pickle=False)
@@ -401,6 +401,51 @@ class MotionPipelineService:
         except (MotionPipelineError, MotionDetectionError) as exc:
             code = exc.code if isinstance(exc, (MotionPipelineError, MotionDetectionError)) else "MOTION_PIPELINE_FAILED"
             return self._fail(record, code, str(exc))
+        except Exception as exc:
+            return self._fail(record, "MOTION_PIPELINE_FAILED", str(exc))
+
+    def process_compile(self, pipeline_id: str) -> MotionPipelineRecord:
+        """Compile and publish a previously confirmed GMR artifact only."""
+        record = self.store.get(pipeline_id)
+        if record is None:
+            raise MotionPipelineError("MOTION_PIPELINE_NOT_FOUND", f"motion pipeline not found: {pipeline_id}", status_code=404)
+        if record.status == "READY":
+            return record
+        if not record.gmr_output_path:
+            raise MotionPipelineError("GMR_CONFIRMATION_REQUIRED", "GMR must finish before compilation can start", status_code=409)
+        version, asset = self._asset_without_actor(record.source_asset_version_id)
+        adapter = self.robot_registry.get(record.edit_config.robot_id if record.edit_config else None)
+        motion_editor = self.motion_editors.get(adapter.name, self.motion_editor)
+        kinematics_compiler = self.kinematics_compilers.get(adapter.name, self.kinematics_compiler)
+        if version.status != AssetVersionStatus.READY:
+            raise MotionPipelineError("ASSET_NOT_READY", f"asset version must be READY, got {version.status}", status_code=409)
+        source = Path(record.gmr_output_path)
+        if not source.is_file():
+            raise MotionPipelineError("GMR_OUTPUT_NOT_FOUND", f"GMR output does not exist: {source}", status_code=409)
+        try:
+            record = self._stage(record, "compile", "RUNNING", message="正在编译训练动作")
+            descriptor = self.motion_registry.detect(source, asset_version_id=version.asset_version_id, trusted_pickle=False, target_dof=adapter.get_spec().dof, robot_id=adapter.name)
+            arrays = self._load_arrays(source, descriptor, adapter=adapter)
+            retarget = self._retarget_metadata(arrays, descriptor, version, adapter=adapter)
+            record = self._stage(record, "retarget", "SUCCEEDED", message="GMR 输出已确认", retarget_motion=retarget)
+            edit = record.edit_config or MotionEditConfig(source_motion_version_id=version.asset_version_id, robot_id=adapter.name)
+            edited = motion_editor.apply(arrays, edit)
+            if edited.arrays is None or not edited.validation.valid:
+                raise MotionPipelineError("MOTION_QUALITY_BLOCKED", "motion edit quality gate blocked compilation", status_code=422)
+            quality = edited.quality
+            if kinematics_compiler is None:
+                quality = edited.quality.model_copy(update={"status": "WARNING", "issues": [*edited.quality.issues, ValidationIssue(code="KINEMATICS_APPROXIMATION", message=f"body arrays use root pose until the {adapter.name} MuJoCo kinematics compiler is installed", severity=ValidationSeverity.WARNING, suggested_action=f"configure the {adapter.name} model path and MuJoCo worker before real-robot deployment")]})
+            record = self._stage(record, "edit", "SUCCEEDED", message=quality.status, quality=quality)
+            train_motion, output_path = self._compile(edited.arrays, version, asset, edited.quality, adapter=adapter, kinematics_compiler=kinematics_compiler)
+            record = self._stage(record, "compile", "SUCCEEDED", message="TrainMotionNPZ generated", train_motion=train_motion)
+            record = self._stage(record, "publish", "RUNNING")
+            output_version, output_key = self._publish(output_path, train_motion, asset)
+            record = self._stage(record, "publish", "SUCCEEDED", message="output asset is READY", output_asset_version_id=output_version.asset_version_id, output_object_key=output_key)
+            ready = record.model_copy(update={"status": "READY", "updated_at": utc_now()})
+            self.store.save(ready)
+            return ready
+        except (MotionPipelineError, MotionDetectionError) as exc:
+            return self._fail(record, exc.code, str(exc))
         except Exception as exc:
             return self._fail(record, "MOTION_PIPELINE_FAILED", str(exc))
 
