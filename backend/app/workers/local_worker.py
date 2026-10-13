@@ -77,6 +77,9 @@ def run(*, worker_id: str = "local-worker", poll_interval: float = 1.0, once: bo
     dispatcher, executor = build_executor()
     outbox = OutboxDispatcher(executor.training_service.run_service.uow, dispatcher)
     dispatcher.recover_running()
+    # Validation jobs failed by older workers before execution because their
+    # payload has no run_id. Requeue those durable envelopes on upgrade.
+    dispatcher.recover_failed(tasks=("allrobotrl.assets.validate",))
     LocalRunRecovery(settings.runtime_root).reconcile(executor.training_service.run_service.uow)
     while True:
         # Move committed API events into the durable queue before claiming a job.
@@ -89,7 +92,11 @@ def run(*, worker_id: str = "local-worker", poll_interval: float = 1.0, once: bo
             continue
         try:
             payload: dict[str, Any] = {**envelope.payload, "operation": _operation_for_task(envelope.task)}
-            _write_process_marker(settings.runtime_root, str(payload["run_id"]))
+            # Asset and motion tasks have no Run. Only Run operations need a
+            # process marker under runs/<run_id>/.
+            run_id = str(payload.get("run_id") or "")
+            if run_id:
+                _write_process_marker(settings.runtime_root, run_id)
             executor.execute(payload)
         except Exception:
             dispatcher.fail(envelope.task_id, retry=False)

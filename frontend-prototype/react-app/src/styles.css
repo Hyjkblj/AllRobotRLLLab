@@ -228,6 +228,9 @@ h1 { font-size: clamp(24px, 2.4vw, 33px); line-height: 1.1; letter-spacing: -.02
 .project-list, .check-list, .run-list, .reward-list { display: grid; gap: 6px; }
 .project-list.compact { max-height: 315px; margin-top: 13px; overflow-y: auto; }
 .project-row, .run-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px 8px; border: 1px solid transparent; border-radius: 7px; text-align: left; background: #fafbfc; }
+.project-row-wrapper { position: relative; }
+.project-row-wrapper .project-row { padding-right: 52px; }
+.project-delete { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; color: #b44444; cursor: pointer; font-size: 10px; }
 .project-row:hover, .project-row.selected, .run-row:hover, .run-row.selected { border-color: #c9dceb; background: #f1f7fc; }
 .project-mark { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 6px; color: #2a679e; background: #e3effa; font-size: 12px; font-weight: 750; }
 .project-row > span:nth-child(2), .run-row > span:nth-child(2) { min-width: 0; flex: 1; display: grid; gap: 2px; }

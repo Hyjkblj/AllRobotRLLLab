@@ -66,7 +66,7 @@ class RunService:
         with self.uow:
             return self.uow.projects.list_for_user(actor.user_id)
 
-    def delete_project(self, *, project_id: str, actor: Actor) -> ProjectRecord:
+    def soft_delete_project(self, *, project_id: str, actor: Actor) -> ProjectRecord:
         with self.uow:
             project = self._project_or_error(project_id)
             self._require_member(project_id, actor.user_id, ProjectRole.OWNER)
@@ -76,6 +76,27 @@ class RunService:
             self.uow.projects.update(deleted)
             self._audit(actor, project_id, "project.deleted", "project", project_id, {})
             return deleted
+
+    def delete_project(self, *, project_id: str, actor: Actor, object_store, pipeline_store=None) -> ProjectRecord:
+        """Permanently remove a project with no Runs or submitted pipelines."""
+        with self.uow:
+            project = self._project_or_error(project_id)
+            self._require_member(project_id, actor.user_id, ProjectRole.OWNER)
+            if self.uow.runs.list_for_project(project_id):
+                raise RunServiceError("PROJECT_HAS_RUNS", "delete the project's training Runs before deleting the project", status_code=409)
+            assets = self.uow.assets.list_for_project(project_id)
+            versions = [version for asset in assets for version in self.uow.assets.list_versions(asset.asset_id)]
+            if pipeline_store is not None and any(pipeline_store.list_for_source(version.asset_version_id) for version in versions):
+                raise RunServiceError("PROJECT_HAS_PIPELINES", "delete the project's motion pipelines before deleting the project", status_code=409)
+            for version in versions:
+                try:
+                    object_store.delete(version.object_key)
+                except Exception as exc:
+                    raise RunServiceError("ASSET_OBJECT_DELETE_FAILED", "a project object could not be removed", status_code=503) from exc
+            for version in versions:
+                self.uow.assets.delete(version.asset_id, version.asset_version_id)
+            self.uow.projects.delete(project_id)
+            return project
 
     def list_runs(self, *, actor: Actor, project_id: str) -> list[RunRecord]:
         with self.uow:

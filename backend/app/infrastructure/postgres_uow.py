@@ -115,6 +115,13 @@ class PostgresProjectRepository(_Repository):
                 raise KeyError(f"project not found: {project.project_id}")
         return project
 
+    def delete(self, project_id: str) -> None:
+        project_uuid = _uuid(project_id)
+        with self.connection.cursor() as cursor:
+            cursor.execute("delete from audit_events where project_id=%s", (project_uuid,))
+            cursor.execute("delete from project_members where project_id=%s", (project_uuid,))
+            cursor.execute("delete from projects where id=%s", (project_uuid,))
+
     def list_for_user(self, user_id: str) -> list[ProjectRecord]:
         with self.connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute("select p.*, u.external_id as owner_external_id from projects p join project_members pm on pm.project_id=p.id join users m on m.id=pm.user_id join users u on u.id=p.owner_id where m.external_id=%s and p.status <> 'DELETED' order by p.updated_at desc", (user_id,))
@@ -334,7 +341,7 @@ class PostgresAssetRepository(_Repository):
     def delete(self, asset_id: str, asset_version_id: str) -> None:
         with self.connection.cursor() as cursor:
             cursor.execute("delete from asset_versions where id=%s", (_uuid(asset_version_id),))
-            cursor.execute("delete from assets where id=%s", (_uuid(asset_id),))
+            cursor.execute("delete from assets where id=%s and not exists (select 1 from asset_versions where asset_id=%s)", (_uuid(asset_id), _uuid(asset_id)))
 
 
 class PostgresArtifactRepository(_Repository):

@@ -114,6 +114,20 @@ class LocalFileTaskDispatcher:
                 self._write(records)
             return changed
 
+    def recover_failed(self, *, tasks: tuple[str, ...]) -> int:
+        """Requeue selected failed task types after a worker fix or restart."""
+        with self._locked():
+            records = self._read()
+            changed = 0
+            for record in records:
+                if record["status"] == "FAILED" and record["task"] in tasks and int(record.get("attempts", 0)) <= 1:
+                    record["status"] = "QUEUED"
+                    record.pop("worker_id", None)
+                    changed += 1
+            if changed:
+                self._write(records)
+            return changed
+
     @contextmanager
     def _locked(self):
         with self._thread_lock:

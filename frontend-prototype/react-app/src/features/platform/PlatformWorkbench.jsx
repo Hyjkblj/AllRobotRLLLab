@@ -84,6 +84,10 @@ function errorLabel(error) {
   const messages = {
     ASSET_NOT_READY: "资源仍在校验，请稍候刷新后再处理。",
     ASSET_KIND_INVALID: "当前资源类型不支持此操作。",
+    ASSET_IN_USE: "该资源已被动作流水线或训练任务引用，暂不能删除。",
+    PROJECT_HAS_RUNS: "项目中已有训练任务，暂不能永久删除。",
+    PROJECT_HAS_PIPELINES: "项目中已有动作流水线，暂不能永久删除。",
+    ASSET_OBJECT_DELETE_FAILED: "文件删除失败，请稍后重试。",
     INPUT_NOT_FOUND: "找不到输入文件，请检查路径。",
     UNSUPPORTED_SOURCE_TYPE: "暂不支持该文件格式或内容。",
     GVHMR_RUNTIME_UNAVAILABLE: "视频处理运行环境未就绪，请检查 GPU 服务。",
@@ -271,18 +275,18 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
     catch (error) { setLocalError(error); }
     finally { setBusy(false); }
   };
-  const removeVideo = async (asset) => {
+  const removeAsset = async (asset) => {
     const versionId = asset.version?.asset_version_id;
-    if (!versionId || (asset.kind || asset.version?.kind) !== "video") return;
-    if (!window.confirm(`确认删除视频“${asset.version?.original_filename || asset.display_name}”？删除后不可恢复。`)) return;
+    if (!versionId) return;
+    if (!window.confirm(`确认永久删除资源“${asset.version?.original_filename || asset.display_name}”？文件和资源记录都将被删除。`)) return;
     setBusy(true); setLocalError(null);
-    try { await platformApi.deleteVideoAsset(versionId); onAssetDeleted?.(versionId); }
+    try { await platformApi.deleteAsset(versionId); onAssetDeleted?.(versionId); }
     catch (error) { setLocalError(error); }
     finally { setBusy(false); }
   };
   const removeProject = async () => {
     const project = projects.find((item) => item.project_id === selectedProjectId);
-    if (!project || !window.confirm(`确认删除项目“${project.name}”？项目将被归档并从列表中隐藏。`)) return;
+    if (!project || !window.confirm(`确认永久删除项目“${project.name}”及其上传文件？已有流水线或训练任务的项目暂不能删除。`)) return;
     setBusy(true); setLocalError(null);
     try { await platformApi.deleteProject(project.project_id); onProjectDeleted?.(project.project_id); }
     catch (error) { setLocalError(error); }
@@ -295,7 +299,7 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
     <div className="platform-columns assets-columns">
       <section className="platform-panel"><SectionHeader eyebrow="PROJECT" title="项目空间" />
         <form className="inline-form" onSubmit={createProject}><input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="项目名称" maxLength={120} /><button className="button button-dark" type="submit" disabled={busy || !projectName.trim()}><Plus size={14} /> 创建</button></form>
-        <div className="project-list compact">{projects.map((project) => <button className={`project-row ${project.project_id === selectedProjectId ? "selected" : ""}`} key={project.project_id} onClick={() => onSelectProject(project.project_id)}><span className="project-mark">{project.name?.slice(0, 1) || "P"}</span><span><strong>{project.name}</strong><small>{project.project_id}</small></span>{project.project_id === selectedProjectId && <><Badge tone="blue">当前</Badge><span role="button" tabIndex={0} className="project-delete" onClick={(event) => { event.stopPropagation(); removeProject(); }}>删除</span></>}</button>)}</div>
+        <div className="project-list compact">{projects.map((project) => <div className="project-row-wrapper" key={project.project_id}><button type="button" className={`project-row ${project.project_id === selectedProjectId ? "selected" : ""}`} onClick={() => onSelectProject(project.project_id)}><span className="project-mark">{project.name?.slice(0, 1) || "P"}</span><span><strong>{project.name}</strong><small>{project.project_id}</small></span>{project.project_id === selectedProjectId && <Badge tone="blue">当前</Badge>}</button>{project.project_id === selectedProjectId && <button type="button" className="project-delete" onClick={removeProject} disabled={busy}>删除</button>}</div>)}</div>
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="UPLOAD" title="添加资源" />
         <div className="upload-zone"><UploadCloud size={24} /><strong>{file ? file.name : "选择视频或动作文件"}</strong><small>{file ? formatBytes(file.size) : "MP4 · NPZ · CSV · PT"}</small><input type="file" accept=".mp4,.mov,.avi,.mkv,.webm,.npz,.csv,.pt,.pkl" onChange={(event) => { const nextFile = event.target.files?.[0] || null; setFile(nextFile); if (nextFile && /\.(mp4|mov|avi|mkv|webm)$/i.test(nextFile.name)) setKind("video"); else if (nextFile && /\.(npz|csv|pt|pkl)$/i.test(nextFile.name)) setKind("motion"); }} /></div>
@@ -305,7 +309,7 @@ function Assets({ projects, selectedProjectId, onSelectProject, onProjectCreated
       </section>
     </div>
     <section className="platform-panel"><SectionHeader eyebrow="ASSET VERSIONS" title="已登记资源" action={<button className="button button-light" onClick={() => onNavigate("motion")}><GitBranch size={14} /> 动作流水线</button>} />
-          {assets.length ? <div className="asset-table"><div className="asset-table-head"><span>文件</span><span>类型</span><span>版本</span><span>状态</span><span>操作</span></div>{assets.map((asset) => { const status = asset.completed?.item?.status || asset.version?.status || "UPLOADED"; const isVideo = (asset.kind || asset.version?.kind) === "video"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.asset_id || asset.version?.asset_id}</small></span><Badge tone="silver">{assetKindLabel(asset.kind || asset.version?.kind)}</Badge><span>v{asset.version?.version || 1}</span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{statusLabel(status)}</Badge>{isVideo ? <button className="button button-danger" type="button" onClick={() => removeVideo(asset)} disabled={busy}>删除视频</button> : <span className="muted-note">—</span>}</div>; })}</div> : <div className="empty-state">暂无资源</div>}
+          {assets.length ? <div className="asset-table"><div className="asset-table-head"><span>文件</span><span>类型</span><span>版本</span><span>状态</span><span>操作</span></div>{assets.map((asset) => { const status = asset.completed?.item?.status || asset.version?.status || "UPLOADED"; return <div className="asset-table-row" key={asset.version?.asset_version_id || asset.asset_id}><span><strong>{asset.version?.original_filename || asset.file?.name || asset.display_name}</strong><small>{asset.asset_id || asset.version?.asset_id}</small></span><Badge tone="silver">{assetKindLabel(asset.kind || asset.version?.kind)}</Badge><span>v{asset.version?.version || 1}</span><Badge tone={status === "READY" ? "green" : status === "REJECTED" ? "red" : "blue"}>{statusLabel(status)}</Badge><button className="button button-danger" type="button" onClick={() => removeAsset(asset)} disabled={busy}>删除资源</button></div>; })}</div> : <div className="empty-state">暂无资源</div>}
     </section>
   </>;
 }

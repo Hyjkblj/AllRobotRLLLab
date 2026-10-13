@@ -72,6 +72,21 @@ def test_local_queue_is_durable_and_idempotent(tmp_path: Path) -> None:
     assert LocalFileTaskDispatcher(tmp_path / "scheduler").pending() == []
 
 
+def test_local_queue_recovers_failed_asset_validation_only(tmp_path: Path) -> None:
+    queue = LocalFileTaskDispatcher(tmp_path / "scheduler")
+    validation = queue.enqueue(queue="asset-io", task="allrobotrl.assets.validate", payload={"asset_version_id": "v1"}, idempotency_key="v1")
+    unrelated = queue.enqueue(queue="motion-gpu", task="allrobotrl.motion.gvhmr", payload={"pipeline_id": "p1"}, idempotency_key="p1")
+    assert queue.claim(worker_id="worker-1", queues=("asset-io",)).task_id == validation
+    assert queue.fail(validation, retry=False)
+    assert queue.fail(unrelated, retry=False)
+
+    assert queue.recover_failed(tasks=("allrobotrl.assets.validate",)) == 1
+    assert [item.task_id for item in queue.pending()] == [validation]
+    assert queue.claim(worker_id="worker-2", queues=("asset-io",)).task_id == validation
+    assert queue.fail(validation, retry=False)
+    assert queue.recover_failed(tasks=("allrobotrl.assets.validate",)) == 0
+
+
 def test_local_gpu_scheduler_honors_exclusive_and_memory_limits(tmp_path: Path) -> None:
     scheduler = LocalGpuScheduler(tmp_path / "scheduler", max_jobs_per_gpu=1)
     snapshot = GpuSnapshot(index=0, uuid="GPU-0", name="RTX 4060", memory_total_mb=8192, memory_used_mb=0, utilization_percent=0)

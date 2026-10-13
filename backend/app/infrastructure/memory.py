@@ -56,6 +56,12 @@ class InMemoryProjectRepository:
             self._projects[project.project_id] = project
             return project
 
+    def delete(self, project_id: str) -> None:
+        with self._lock:
+            self._projects.pop(project_id, None)
+            for key in [key for key in self._members if key[0] == project_id]:
+                self._members.pop(key, None)
+
     def list_for_user(self, user_id: str) -> list[ProjectRecord]:
         with self._lock:
             project_ids = {project_id for project_id, member_user_id in self._members if member_user_id == user_id}
@@ -245,7 +251,8 @@ class InMemoryAssetRepository:
     def delete(self, asset_id: str, asset_version_id: str) -> None:
         with self._lock:
             self._versions.pop(asset_version_id, None)
-            self._assets.pop(asset_id, None)
+            if not any(version.asset_id == asset_id for version in self._versions.values()):
+                self._assets.pop(asset_id, None)
 
 
 class InMemoryArtifactRepository:

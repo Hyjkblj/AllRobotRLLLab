@@ -391,7 +391,7 @@ def get_project(project_id: str, request: Request) -> dict:
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str, request: Request) -> dict:
     try:
-        project = run_service.delete_project(project_id=project_id, actor=_actor(request))
+        project = run_service.delete_project(project_id=project_id, actor=_actor(request), object_store=object_store, pipeline_store=motion_pipeline_service.store)
     except RunServiceError as exc:
         raise _service_error(request, exc) from exc
     return {"request_id": _request_id(request), "deleted": True, "item": project.model_dump(mode="json"), "resource_version": project.updated_at}
@@ -446,7 +446,7 @@ def list_asset_versions(asset_id: str, request: Request) -> dict:
 @router.delete("/assets/{asset_version_id}")
 def delete_asset(asset_version_id: str, request: Request) -> dict:
     try:
-        asset, version = asset_service.delete_asset_version(actor=_actor(request), asset_version_id=asset_version_id, video_only=True)
+        asset, version = asset_service.delete_asset_version(actor=_actor(request), asset_version_id=asset_version_id, pipeline_store=motion_pipeline_service.store)
     except RunServiceError as exc:
         raise _service_error(request, exc) from exc
     return {"request_id": _request_id(request), "deleted": True, "asset_id": asset.asset_id, "asset_version_id": version.asset_version_id}

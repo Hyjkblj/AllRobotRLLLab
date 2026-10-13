@@ -113,15 +113,26 @@ class AssetService:
             self._require_member(asset.project_id, actor.user_id, ProjectRole.VIEWER)
             return asset, self.uow.assets.list_versions(asset_id)
 
-    def delete_asset_version(self, *, actor: Actor, asset_version_id: str, video_only: bool = False) -> tuple[AssetRecord, AssetVersion]:
+    def delete_asset_version(self, *, actor: Actor, asset_version_id: str, pipeline_store=None) -> tuple[AssetRecord, AssetVersion]:
         with self.uow:
             version = self.uow.assets.version(asset_version_id)
             asset = self.uow.assets.get(version.asset_id) if version else None
             if version is None or asset is None:
                 raise RunServiceError("ASSET_VERSION_NOT_FOUND", f"asset version not found: {asset_version_id}", status_code=404)
             self._require_member(asset.project_id, actor.user_id, ProjectRole.EDITOR)
-            if video_only and asset.kind != AssetKind.VIDEO:
-                raise RunServiceError("ASSET_KIND_INVALID", "only video assets can be deleted from this endpoint", status_code=409)
+            if pipeline_store is not None:
+                if pipeline_store.list_for_source(asset_version_id):
+                    raise RunServiceError("ASSET_IN_USE", "asset is used by a motion pipeline", status_code=409)
+                for project_asset in self.uow.assets.list_for_project(asset.project_id):
+                    for source_version in self.uow.assets.list_versions(project_asset.asset_id):
+                        if any(record.output_asset_version_id == asset_version_id for record in pipeline_store.list_for_source(source_version.asset_version_id)):
+                            raise RunServiceError("ASSET_IN_USE", "asset is a motion pipeline output", status_code=409)
+            for run in self.uow.runs.list_for_project(asset.project_id):
+                if asset_version_id in run.manifest.motion.values():
+                    raise RunServiceError("ASSET_IN_USE", "asset is used by a training Run", status_code=409)
+                state = self.uow.p3_states.get(run.run_id)
+                if state and state.training_config and state.training_config.motion_asset_version_id == asset_version_id:
+                    raise RunServiceError("ASSET_IN_USE", "asset is used by a training Run", status_code=409)
             deleter = getattr(self.object_store, "delete", None)
             if callable(deleter):
                 try:
