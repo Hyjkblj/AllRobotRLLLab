@@ -221,15 +221,26 @@ class MotionPipelineService:
 
     def enqueue_phase(self, *, actor: Actor, pipeline_id: str, phase: str) -> tuple[MotionPipelineRecord, TaskSubmission]:
         record = self.get(actor=actor, pipeline_id=pipeline_id)
-        if phase == "gmr" and not record.gvhmr_output_path:
-            raise MotionPipelineError("GVHMR_CONFIRMATION_REQUIRED", "GVHMR must finish before GMR can start", status_code=409)
-        if phase == "compile" and not record.gmr_output_path:
-            raise MotionPipelineError("GMR_CONFIRMATION_REQUIRED", "GMR must finish before compilation can start", status_code=409)
         if phase not in {"gvhmr", "gmr", "compile"}:
             raise MotionPipelineError("MOTION_PHASE_INVALID", f"unsupported motion phase: {phase}")
+        if record.status in {"QUEUED", "RUNNING"}:
+            raise MotionPipelineError("MOTION_PHASE_IN_PROGRESS", "a motion stage is already queued or running", status_code=409)
+        if record.status == "READY":
+            raise MotionPipelineError("MOTION_PIPELINE_READY", "this motion pipeline is already complete", status_code=409)
+        if phase == "gvhmr" and record.gvhmr_output_path:
+            raise MotionPipelineError("GVHMR_ALREADY_READY", "GVHMR output is already ready; start GMR", status_code=409)
+        if phase == "gmr" and not record.gvhmr_output_path:
+            raise MotionPipelineError("GVHMR_CONFIRMATION_REQUIRED", "GVHMR must finish before GMR can start", status_code=409)
+        if phase == "gmr" and record.gmr_output_path:
+            raise MotionPipelineError("GMR_ALREADY_READY", "GMR output is already ready; start compilation", status_code=409)
+        if phase == "compile" and not record.gmr_output_path:
+            raise MotionPipelineError("GMR_CONFIRMATION_REQUIRED", "GMR must finish before compilation can start", status_code=409)
         queue = "motion-gpu" if phase in {"gvhmr", "gmr"} else "motion-cpu"
         payload = {"pipeline_id": pipeline_id, "asset_version_id": record.source_asset_version_id, "phase": phase}
-        key = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        # A failed stage needs a fresh queue envelope; the previous key points
+        # permanently at its FAILED task in the local durable dispatcher.
+        retry_token = str(uuid.uuid4()) if record.status == "FAILED" else ""
+        key = hashlib.sha256(json.dumps(payload | {"retry_token": retry_token}, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         task_name = "allrobotrl.motion.process" if phase == "compile" else f"allrobotrl.motion.{phase}"
         try:
             task_id = self.task_dispatcher.enqueue(queue=queue, task=task_name, payload=payload, idempotency_key=key)
@@ -299,6 +310,8 @@ class MotionPipelineService:
             return record
         except RunnerError as exc:
             return self._fail(record, exc.code, exc.message)
+        except Exception as exc:
+            return self._fail(record, "GVHMR_STAGE_FAILED", str(exc))
 
     def process_gmr(self, pipeline_id: str) -> MotionPipelineRecord:
         """Run only human-pose→robot retargeting after GVHMR confirmation."""
@@ -321,6 +334,8 @@ class MotionPipelineService:
             return record
         except RunnerError as exc:
             return self._fail(record, exc.code, exc.message)
+        except Exception as exc:
+            return self._fail(record, "GMR_STAGE_FAILED", str(exc))
 
     def process(self, pipeline_id: str) -> MotionPipelineRecord:
         record = self.store.get(pipeline_id)
@@ -493,13 +508,13 @@ class MotionPipelineService:
         allowed = {".mp4", ".webm", ".avi", ".mov", ".png", ".jpg", ".json"}
         return [str(path.relative_to(root)) for path in sorted(root.rglob("*")) if path.is_file() and path.suffix.lower() in allowed and path.stat().st_size > 0]
 
-    def _stage(self, record: MotionPipelineRecord, name: str, status: str, *, message: str | None = None, **updates: Any) -> MotionPipelineRecord:
+    def _stage(self, record: MotionPipelineRecord, name: str, stage_status: str, *, message: str | None = None, **updates: Any) -> MotionPipelineRecord:
         now = utc_now()
         stages = list(record.stages)
         index = next(i for i, item in enumerate(stages) if item.name == name)
         current = stages[index]
-        started = current.started_at or (now if status == "RUNNING" else current.started_at)
-        finished = now if status in {"SUCCEEDED", "FAILED", "SKIPPED"} else current.finished_at
+        started = current.started_at or (now if stage_status == "RUNNING" else current.started_at)
+        finished = now if stage_status in {"SUCCEEDED", "FAILED", "SKIPPED"} else current.finished_at
         duration = None
         if started and finished:
             try:
@@ -507,7 +522,7 @@ class MotionPipelineService:
             except ValueError:
                 duration = None
         artifacts = updates.pop("artifacts", None)
-        stages[index] = current.model_copy(update={"status": status, "started_at": started, "finished_at": finished, "duration_seconds": duration, "message": message or current.message, "error_code": updates.pop("error_code", current.error_code), "artifacts": artifacts if artifacts is not None else current.artifacts})
+        stages[index] = current.model_copy(update={"status": stage_status, "started_at": started, "finished_at": finished, "duration_seconds": duration, "message": message or current.message, "error_code": updates.pop("error_code", current.error_code), "artifacts": artifacts if artifacts is not None else current.artifacts})
         record = record.model_copy(update={"stages": stages, "updated_at": now, **updates})
         self.store.save(record)
         return record

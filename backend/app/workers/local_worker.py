@@ -12,6 +12,7 @@ import json
 import os
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -77,9 +78,14 @@ def run(*, worker_id: str = "local-worker", poll_interval: float = 1.0, once: bo
     dispatcher, executor = build_executor()
     outbox = OutboxDispatcher(executor.training_service.run_service.uow, dispatcher)
     dispatcher.recover_running()
-    # Validation jobs failed by older workers before execution because their
-    # payload has no run_id. Requeue those durable envelopes on upgrade.
-    dispatcher.recover_failed(tasks=("allrobotrl.assets.validate",))
+    # Retry failed validation and motion envelopes once after upgrade. Older
+    # workers left their assets VALIDATING or pipelines RUNNING on exceptions.
+    dispatcher.recover_failed(tasks=(
+        "allrobotrl.assets.validate",
+        "allrobotrl.motion.gvhmr",
+        "allrobotrl.motion.gmr",
+        "allrobotrl.motion.process",
+    ))
     LocalRunRecovery(settings.runtime_root).reconcile(executor.training_service.run_service.uow)
     while True:
         # Move committed API events into the durable queue before claiming a job.
@@ -98,7 +104,29 @@ def run(*, worker_id: str = "local-worker", poll_interval: float = 1.0, once: bo
             if run_id:
                 _write_process_marker(settings.runtime_root, run_id)
             executor.execute(payload)
-        except Exception:
+        except Exception as exc:
+            traceback.print_exc()
+            if envelope.task == "allrobotrl.assets.validate":
+                try:
+                    asset_version_id = str(envelope.payload["asset_version_id"])
+                    with executor.motion_pipeline_service.uow:
+                        version = executor.motion_pipeline_service.uow.assets.version(asset_version_id)
+                    if version is not None and version.status.value == "VALIDATING":
+                        executor.motion_pipeline_service.asset_service.mark_validated(
+                            asset_version_id=asset_version_id,
+                            valid=False,
+                            rejection_code="VALIDATION_WORKER_FAILED",
+                        )
+                except Exception:
+                    traceback.print_exc()
+            if envelope.task in {"allrobotrl.motion.gvhmr", "allrobotrl.motion.gmr", "allrobotrl.motion.process"}:
+                try:
+                    pipeline_id = str(envelope.payload["pipeline_id"])
+                    pipeline = executor.motion_pipeline_service.store.get(pipeline_id)
+                    if pipeline is not None and pipeline.status in {"QUEUED", "RUNNING"}:
+                        executor.motion_pipeline_service._fail(pipeline, "MOTION_WORKER_FAILED", str(exc))
+                except Exception:
+                    traceback.print_exc()
             dispatcher.fail(envelope.task_id, retry=False)
         else:
             dispatcher.complete(envelope.task_id)

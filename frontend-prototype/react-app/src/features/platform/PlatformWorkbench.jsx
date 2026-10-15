@@ -326,9 +326,23 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
   const selectedAssetIsCompiled = /train_motion|TrainMotionNPZ/i.test(`${selectedAsset?.version?.original_filename || ""} ${selectedAsset?.display_name || ""}`);
   const selectedRobot = robots.find((item) => item.robot_id === selectedRobotId);
   const robotLabel = selectedRobot?.model || selectedRobot?.robot_id || "目标机器人";
+  const nextVideoStage = pipeline?.gmr_output_path ? "compile" : pipeline?.gvhmr_output_path ? "gmr" : "gvhmr";
+  const nextVideoAction = nextVideoStage === "compile" ? "编译训练动作" : nextVideoStage === "gmr" ? "启动 GMR" : "开始 GVHMR";
+  const videoActionLabel = pipeline?.status === "FAILED" ? `重试${nextVideoAction}` : nextVideoAction;
 
   useEffect(() => {
     setPipeline(null);
+  }, [assetVersionId]);
+
+  useEffect(() => {
+    if (!assetVersionId) return undefined;
+    let cancelled = false;
+    platformApi.getMotionPipeline(assetVersionId).then((result) => {
+      if (!cancelled) setPipeline(result.item);
+    }).catch((error) => {
+      if (!cancelled && error?.status !== 404) setLocalError(error);
+    });
+    return () => { cancelled = true; };
   }, [assetVersionId]);
 
   useEffect(() => {
@@ -367,8 +381,9 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
       const editConfig = { source_motion_version_id: assetVersionId, robot_id: selectedRobotId || robots[0]?.robot_id, global_transform: { translation: [0, 0, 0], yaw_offset: 0, time_scale: 1 }, joint_offsets: [], ik_targets: [], keyframes: [], filters: { smooth: true, max_velocity_check: true } };
       let result;
       if (selectedAssetKind === "video" && !pipeline?.pipeline_id) result = await platformApi.processMotion(assetVersionId, editConfig, "async", "gvhmr");
-      else if (selectedAssetKind === "video" && pipeline?.status === "GVHMR_READY") result = await platformApi.startGmr(pipeline.pipeline_id);
-      else if (selectedAssetKind === "video" && pipeline?.status === "GMR_READY") result = await platformApi.compileMotionPipeline(pipeline.pipeline_id);
+      else if (selectedAssetKind === "video" && pipeline?.gmr_output_path) result = await platformApi.compileMotionPipeline(pipeline.pipeline_id);
+      else if (selectedAssetKind === "video" && pipeline?.gvhmr_output_path) result = await platformApi.startGmr(pipeline.pipeline_id);
+      else if (selectedAssetKind === "video") result = await platformApi.startGvhmr(pipeline.pipeline_id);
       else result = await platformApi.processMotion(assetVersionId, editConfig, "async", "full");
       setPipeline(result.item);
     } catch (error) { setLocalError(error); }
@@ -386,9 +401,10 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
     <div className="pipeline-note"><Info size={15} /><span>本地模式支持已登记机器人的 NPZ、CSV、PT 直接轨迹转换；视频和人体姿态输入会根据运行时配置进入 GVHMR/GMR。</span></div>
     <div className="platform-columns">
       <section className="platform-panel"><SectionHeader eyebrow="INPUT CHECK" title="输入检查" /><label className="target-robot-field">目标机器人<select value={selectedRobotId || ""} onChange={(event) => onRobotSelect?.(event.target.value)}><option value="">选择机器人</option>{robots.map((item) => <option key={item.robot_id} value={item.robot_id}>{item.model || item.robot_id} · {item.dof} DoF</option>)}</select></label>
-        {selectedAssetKind === "video" ? <div className="pipeline-note"><FileCheck2 size={15} /><span>视频上传阶段只做格式和文件可读性校验；人体姿态恢复将在提交处理后单独运行。</span></div> : <form className="stack-form" onSubmit={detect}><label>已登记输入<select value={assetVersionId} onChange={(event) => { setAssetVersionId(event.target.value); if (event.target.value) setPath(""); }}><option value="">选择动作 AssetVersion</option>{sourceAssets.filter((asset) => (asset.kind || asset.version?.kind) !== "video").map((asset) => <option key={asset.version.asset_version_id} value={asset.version.asset_version_id}>{assetKindLabel(asset.kind || asset.version?.kind)} · {asset.version.original_filename} · v{asset.version.version} · {statusLabel(asset.version.status)}</option>)}</select></label><label>或服务器路径<input value={path} onChange={(event) => { setPath(event.target.value); if (event.target.value) setAssetVersionId(""); }} placeholder="/data/motions/walk.npz" /></label><button className="button button-blue" type="submit" disabled={busy || (!path.trim() && !assetVersionId)}>{busy ? <><LoaderCircle size={14} className="spin" /> 检测中</> : <><FileCheck2 size={14} /> 检查动作格式</>}</button></form>}
+        <div className="stack-form"><label>已登记输入<select value={assetVersionId} onChange={(event) => { setAssetVersionId(event.target.value); if (event.target.value) setPath(""); }}><option value="">选择视频或动作资源</option>{sourceAssets.filter((asset) => asset.version?.asset_version_id).map((asset) => <option key={asset.version.asset_version_id} value={asset.version.asset_version_id}>{assetKindLabel(asset.kind || asset.version?.kind)} · {asset.version.original_filename} · v{asset.version.version} · {statusLabel(asset.version.status)}</option>)}</select></label></div>
+        {selectedAssetKind === "video" ? <div className="pipeline-note"><FileCheck2 size={15} /><span>视频上传阶段只做格式和文件可读性校验；人体姿态恢复将在提交处理后单独运行。</span></div> : <form className="stack-form" onSubmit={detect}><label>或服务器路径<input value={path} onChange={(event) => { setPath(event.target.value); if (event.target.value) setAssetVersionId(""); }} placeholder="/data/motions/walk.npz" /></label><button className="button button-blue" type="submit" disabled={busy || (!path.trim() && !assetVersionId)}>{busy ? <><LoaderCircle size={14} className="spin" /> 检测中</> : <><FileCheck2 size={14} /> 检查动作格式</>}</button></form>}
         {detection && <div className="detection-result"><div><Badge tone="green">VALID</Badge><strong>{detection.detected_type}</strong></div><span>{detection.file_format} · {detection.source_skeleton}</span><small>{detection.detector_version}</small></div>}
-        <div className="pipeline-submit"><div><span className="panel-kicker">下一步</span><strong>{selectedAssetIsCompiled ? "该资源已经是 TrainMotionNPZ" : selectedAssetKind === "video" ? (pipeline?.status === "GVHMR_READY" ? "确认人体姿态后启动 GMR" : pipeline?.status === "GMR_READY" ? "确认机器人动作后编译训练动作" : "开始 GVHMR 人体姿态提取") : selectedAsset?.version?.status === "READY" ? "准备编译训练动作" : "先选择就绪输入"}</strong><small>{pipeline?.error_code ? `${pipeline.error_code} · ${pipeline.error_message}` : selectedAssetKind === "video" ? "每个阶段完成后可单独检查和确认" : "处理成功后会发布新的 TrainMotionNPZ 资源版本"}</small></div><button className="button button-dark" onClick={process} disabled={busy || !assetVersionId || selectedAssetIsCompiled || selectedAsset?.version?.status !== "READY" || ["QUEUED", "RUNNING"].includes(pipeline?.status)}>{busy ? <><LoaderCircle size={14} className="spin" /> 处理中</> : <><GitBranch size={14} /> {selectedAssetKind === "video" ? (pipeline?.status === "GVHMR_READY" ? "启动 GMR" : pipeline?.status === "GMR_READY" ? "编译训练动作" : "开始 GVHMR") : "编译并发布"}</>}</button></div>
+        <div className="pipeline-submit"><div><span className="panel-kicker">下一步</span><strong>{selectedAssetIsCompiled ? "该资源已经是 TrainMotionNPZ" : selectedAssetKind === "video" ? videoActionLabel : selectedAsset?.version?.status === "READY" ? "准备编译训练动作" : "先选择就绪输入"}</strong><small>{pipeline?.error_code ? `${pipeline.error_code} · ${pipeline.error_message}` : selectedAssetKind === "video" ? "每个阶段完成后可单独检查和确认" : "处理成功后会发布新的 TrainMotionNPZ 资源版本"}</small></div><button className="button button-dark" onClick={process} disabled={busy || !assetVersionId || selectedAssetIsCompiled || selectedAsset?.version?.status !== "READY" || ["QUEUED", "RUNNING", "READY"].includes(pipeline?.status)}>{busy ? <><LoaderCircle size={14} className="spin" /> 处理中</> : <><GitBranch size={14} /> {selectedAssetKind === "video" ? videoActionLabel : "编译并发布"}</>}</button></div>
       </section>
       <section className="platform-panel"><SectionHeader eyebrow="RUNNER STATUS" title="处理器状态" />
         <div className="check-list"><div><span><Activity size={15} /> GVHMR 人体姿态</span><Badge tone={stageTone("detect")}>{statusLabel(stage("detect")?.status || "待开始")}</Badge></div><div><span><GitBranch size={15} /> {robotLabel} GMR 重定向</span><Badge tone={stageTone("retarget")}>{statusLabel(stage("retarget")?.status || "待开始")}</Badge></div><div><span><ShieldCheck size={15} /> 质量检查</span><Badge tone={stageTone("edit")}>{statusLabel(stage("edit")?.status || "待开始")}</Badge></div><div><span><FileCheck2 size={15} /> 训练动作编译</span><Badge tone={stageTone("compile")}>{statusLabel(stage("compile")?.status || "待开始")}</Badge></div></div>

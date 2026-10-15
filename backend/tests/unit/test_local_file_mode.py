@@ -87,6 +87,28 @@ def test_local_queue_recovers_failed_asset_validation_only(tmp_path: Path) -> No
     assert queue.recover_failed(tasks=("allrobotrl.assets.validate",)) == 0
 
 
+def test_local_queue_recovers_legacy_failed_validation_after_multiple_attempts(tmp_path: Path) -> None:
+    queue = LocalFileTaskDispatcher(tmp_path / "scheduler")
+    validation = queue.enqueue(queue="asset-io", task="allrobotrl.assets.validate", payload={"asset_version_id": "legacy"}, idempotency_key="legacy")
+    assert queue.claim(worker_id="old-worker-1", queues=("asset-io",)).task_id == validation
+    assert queue.fail(validation, retry=True)
+    assert queue.claim(worker_id="old-worker-2", queues=("asset-io",)).task_id == validation
+    assert queue.fail(validation, retry=False)
+    assert queue.recover_failed(tasks=("allrobotrl.assets.validate",)) == 1
+    assert queue.recover_failed(tasks=("allrobotrl.assets.validate",)) == 0
+
+
+def test_local_queue_recovers_failed_motion_stage_once(tmp_path: Path) -> None:
+    queue = LocalFileTaskDispatcher(tmp_path / "scheduler")
+    task_id = queue.enqueue(queue="motion-gpu", task="allrobotrl.motion.gvhmr", payload={"pipeline_id": "p1"}, idempotency_key="p1")
+    assert queue.claim(worker_id="old-worker", queues=("motion-gpu",)).task_id == task_id
+    assert queue.fail(task_id, retry=False)
+    assert queue.recover_failed(tasks=("allrobotrl.motion.gvhmr",)) == 1
+    assert queue.claim(worker_id="new-worker", queues=("motion-gpu",)).task_id == task_id
+    assert queue.fail(task_id, retry=False)
+    assert queue.recover_failed(tasks=("allrobotrl.motion.gvhmr",)) == 0
+
+
 def test_local_gpu_scheduler_honors_exclusive_and_memory_limits(tmp_path: Path) -> None:
     scheduler = LocalGpuScheduler(tmp_path / "scheduler", max_jobs_per_gpu=1)
     snapshot = GpuSnapshot(index=0, uuid="GPU-0", name="RTX 4060", memory_total_mb=8192, memory_used_mb=0, utilization_percent=0)

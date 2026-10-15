@@ -250,7 +250,7 @@ class TaskSubmission(ContractModel):
     task_id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
-    operation: Literal["train", "export", "sim2sim", "motion_process", "asset_validate"]
+    operation: Literal["train", "export", "sim2sim", "motion_process", "motion_full", "motion_gvhmr", "motion_gmr", "motion_compile", "asset_validate"]
     queue: str = Field(min_length=1)
     status: Literal["QUEUED", "RUNNING", "SUCCEEDED", "FAILED"] = "QUEUED"
     idempotency_key: str = Field(pattern=r"^[0-9a-f]{64}$")

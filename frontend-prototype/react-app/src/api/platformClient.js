@@ -97,6 +97,7 @@ export const platformApi = {
   detectMotion: ({ path, assetVersionId, robotId }) => request("/motions/detect", { method: "POST", body: JSON.stringify({ path: path || null, asset_version_id: assetVersionId || null, robot_id: robotId || null }) }),
   processMotion: (assetVersionId, editConfig = null, executionMode = "async", phase = "full") => request(`/motions/${encodeURIComponent(assetVersionId)}/process?phase=${encodeURIComponent(phase)}`, { method: "POST", headers: { "X-Execution-Mode": executionMode }, body: JSON.stringify({ edit_config: editConfig }) }),
   startGmr: (pipelineId) => request(`/motion-pipelines/${encodeURIComponent(pipelineId)}/gmr`, { method: "POST" }),
+  startGvhmr: (pipelineId) => request(`/motion-pipelines/${encodeURIComponent(pipelineId)}/gvhmr`, { method: "POST" }),
   compileMotionPipeline: (pipelineId) => request(`/motion-pipelines/${encodeURIComponent(pipelineId)}/compile`, { method: "POST" }),
   getMotionPipeline: (assetVersionId) => request(`/motions/${encodeURIComponent(assetVersionId)}/pipeline`),
   getMotionPipelineById: (pipelineId) => request(`/motion-pipelines/${encodeURIComponent(pipelineId)}`),

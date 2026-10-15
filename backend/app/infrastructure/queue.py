@@ -120,8 +120,9 @@ class LocalFileTaskDispatcher:
             records = self._read()
             changed = 0
             for record in records:
-                if record["status"] == "FAILED" and record["task"] in tasks and int(record.get("attempts", 0)) <= 1:
+                if record["status"] == "FAILED" and record["task"] in tasks and not record.get("recovered_after_upgrade"):
                     record["status"] = "QUEUED"
+                    record["recovered_after_upgrade"] = True
                     record.pop("worker_id", None)
                     changed += 1
             if changed:
