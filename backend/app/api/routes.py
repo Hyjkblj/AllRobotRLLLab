@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from fastapi import APIRouter, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +29,7 @@ from backend.app.application.platform_assembly import build_platform_assembly
 from backend.app.application.run_service import RunService, RunServiceError, utc_now
 from backend.app.application.training_validator import validate_training_config
 from backend.app.application.training_service import TrainingService, TrainingServiceError
+from backend.app.api.websocket_routes import build_status_websocket_router
 from backend.app.config.settings import settings
 from backend.app.domain.contracts import Actor, ArtifactRecord, AssetKind, LicenseInfo, MotionEditConfig, ProjectRole, RewardConfig, RunManifest, RunStatus, Sim2SimThresholds, TrainingConfig
 from backend.app.infrastructure.memory import InMemoryUnitOfWork
@@ -96,6 +97,7 @@ motion_pipeline_service = MotionPipelineService(
     motion_editors=motion_editors,
     kinematics_compilers=runtime_adapters.get("kinematics_compilers", {}),
 )
+router.include_router(build_status_websocket_router(asset_service=asset_service, motion_pipeline_service=motion_pipeline_service))
 
 
 def _authorize_motion_source(request: Request, source_motion_version_id: str) -> None:
@@ -407,29 +409,6 @@ def list_project_assets(project_id: str, request: Request) -> dict:
     return {"request_id": _request_id(request), "items": items, "resource_version": str(len(items))}
 
 
-@router.websocket("/ws/projects/{project_id}/assets")
-async def watch_project_assets(websocket: WebSocket, project_id: str) -> None:
-    """Push asset status changes from the durable store to connected clients."""
-    await websocket.accept()
-    actor = Actor(user_id=websocket.headers.get("x-user-id", "local-user").strip() or "local-user", email=websocket.headers.get("x-user-email"))
-    try:
-        last = None
-        while True:
-            records = asset_service.list_assets(actor=actor, project_id=project_id)
-            payload = [{"asset": asset.model_dump(mode="json"), "versions": [version.model_dump(mode="json") for version in versions]} for asset, versions in records]
-            serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            if serialized != last:
-                await websocket.send_json({"type": "assets.snapshot", "items": payload})
-                last = serialized
-            await asyncio.sleep(1.0)
-    except WebSocketDisconnect:
-        return
-    except RunServiceError as exc:
-        await websocket.close(code=4403 if exc.status_code == 403 else 4404, reason=exc.message)
-    except Exception:
-        await websocket.close(code=1011, reason="asset watcher failed")
-
-
 @router.get("/projects/{project_id}/runs")
 def list_project_runs(project_id: str, request: Request) -> dict:
     try:
@@ -722,32 +701,6 @@ def get_motion_pipeline_by_id(pipeline_id: str, request: Request) -> dict:
     except MotionPipelineError as exc:
         raise _error(request, exc.code, exc.message, status_code=exc.status_code) from exc
     return {"request_id": _request_id(request), "item": record.model_dump(mode="json"), "resource_version": record.updated_at}
-
-
-@router.websocket("/ws/motion-pipelines/{pipeline_id}")
-async def watch_motion_pipeline(websocket: WebSocket, pipeline_id: str) -> None:
-    """Push motion pipeline changes while GVHMR/GMR/compile is running."""
-    await websocket.accept()
-    actor = Actor(user_id=websocket.headers.get("x-user-id", "local-user").strip() or "local-user", email=websocket.headers.get("x-user-email"))
-    try:
-        last = None
-        while True:
-            record = motion_pipeline_service.get(actor=actor, pipeline_id=pipeline_id)
-            payload = record.model_dump(mode="json")
-            serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            if serialized != last:
-                await websocket.send_json({"type": "motion_pipeline.snapshot", "item": payload})
-                last = serialized
-            if record.status in {"GVHMR_READY", "GMR_READY", "READY", "FAILED"}:
-                await websocket.close(code=1000, reason="pipeline reached a stable state")
-                return
-            await asyncio.sleep(1.0)
-    except WebSocketDisconnect:
-        return
-    except MotionPipelineError as exc:
-        await websocket.close(code=4403 if exc.status_code == 403 else 4404, reason=exc.message)
-    except Exception:
-        await websocket.close(code=1011, reason="pipeline watcher failed")
 
 
 @router.get("/motion-pipelines/{pipeline_id}/visualizations/{stage}/{artifact_path:path}")

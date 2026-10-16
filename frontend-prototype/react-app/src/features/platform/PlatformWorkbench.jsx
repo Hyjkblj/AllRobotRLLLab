@@ -36,6 +36,7 @@ import {
   X
 } from "lucide-react";
 import { platformApi, PlatformApiError } from "../../api/platformClient";
+import { useAssetStatusSocket, useMotionPipelineSocket } from "./hooks/useStatusSockets";
 
 const NAV_ITEMS = [
   { id: "overview", label: "总览", icon: Gauge },
@@ -345,25 +346,11 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
     return () => { cancelled = true; };
   }, [assetVersionId]);
 
-  useEffect(() => {
-    // A stage-ready state is a user confirmation gate. Stop polling until the
-    // user explicitly starts the next stage; this avoids needless GET traffic
-    // while preserving polling for queued/running work.
-    if (!pipeline?.pipeline_id || ["GVHMR_READY", "GMR_READY", "READY", "FAILED"].includes(pipeline.status)) return undefined;
-    let cancelled = false;
-    let socket;
-    let fallback;
-    const apply = (item) => { if (!cancelled && item) { setPipeline(item); if (["READY", "FAILED"].includes(item.status)) onRefresh?.(); } };
-    const poll = () => platformApi.getMotionPipelineById(pipeline.pipeline_id).then((result) => apply(result.item)).catch((error) => { if (!cancelled) setLocalError(error); });
-    const startFallback = () => { if (!fallback && !cancelled) fallback = window.setInterval(poll, 1500); };
-    try {
-      socket = new WebSocket(platformApi.watchMotionPipelineUrl(pipeline.pipeline_id));
-      socket.onmessage = (event) => { try { const message = JSON.parse(event.data); if (message.type === "motion_pipeline.snapshot") apply(message.item); } catch { /* ignore malformed events */ } };
-      socket.onerror = startFallback;
-      socket.onclose = startFallback;
-    } catch { startFallback(); }
-    return () => { cancelled = true; socket?.close(); if (fallback) window.clearInterval(fallback); };
-  }, [onRefresh, pipeline?.pipeline_id, pipeline?.status]);
+  useMotionPipelineSocket(pipeline?.pipeline_id, {
+    enabled: Boolean(pipeline?.pipeline_id) && !["GVHMR_READY", "GMR_READY", "READY", "FAILED"].includes(pipeline?.status),
+    onSnapshot: (item) => { if (item) { setPipeline(item); if (["READY", "FAILED"].includes(item.status)) onRefresh?.(); } },
+    onFallback: () => platformApi.getMotionPipelineById(pipeline.pipeline_id).then((result) => setPipeline(result.item)).catch(setLocalError)
+  });
 
   const detect = async (event) => {
     event.preventDefault();
@@ -700,33 +687,6 @@ export default function PlatformWorkbench({ onOpenEditor }) {
     return () => { cancelled = true; };
   }, [selectedProjectId]);
 
-  useEffect(() => {
-    if (!selectedProjectId) return undefined;
-    let cancelled = false;
-    let socket;
-    let fallback;
-    const applySnapshot = (items) => {
-      const flattened = (items || []).map(({ asset, versions }) => ({ ...asset, version: versions?.[versions.length - 1] || null }));
-      setAssets(flattened);
-    };
-    try {
-      socket = new WebSocket(platformApi.watchProjectAssetsUrl(selectedProjectId));
-      socket.onmessage = (event) => {
-        if (cancelled) return;
-        try { const message = JSON.parse(event.data); if (message.type === "assets.snapshot") applySnapshot(message.items); } catch { /* ignore malformed events */ }
-      };
-      socket.onerror = () => {
-        if (!fallback && !cancelled) fallback = window.setInterval(refreshProject, 2000);
-      };
-      socket.onclose = () => {
-        if (!fallback && !cancelled) fallback = window.setInterval(refreshProject, 2000);
-      };
-    } catch {
-      fallback = window.setInterval(refreshProject, 2000);
-    }
-    return () => { cancelled = true; socket?.close(); if (fallback) window.clearInterval(fallback); };
-  }, [selectedProjectId]);
-
   const refreshProject = async () => {
     if (!selectedProjectId) return;
     try {
@@ -736,6 +696,11 @@ export default function PlatformWorkbench({ onOpenEditor }) {
       setRuns(runResult.items || []);
     } catch (loadError) { setError(loadError); }
   };
+
+  useAssetStatusSocket(selectedProjectId, {
+    onSnapshot: (items) => setAssets((items || []).map(({ asset, versions }) => ({ ...asset, version: versions?.[versions.length - 1] || null }))),
+    onFallback: refreshProject
+  });
 
   const createProject = (project) => { setProjects((current) => [project, ...current.filter((item) => item.project_id !== project.project_id)]); setSelectedProjectId(project.project_id); };
   const addAsset = (asset) => {
