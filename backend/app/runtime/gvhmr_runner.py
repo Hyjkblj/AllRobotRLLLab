@@ -40,7 +40,11 @@ class GVHMRRunner:
         # point while still receiving the same input/output contract.
         if command and "{input}" in command:
             command = tuple(item.format(input=str(source), output=str(target)) for item in command)
-        result = run_external(stage="gvhmr", workspace=target, command=command or default, timeout_seconds=self.timeout_seconds, env={"GVHMR_INPUT": str(source), "GVHMR_OUTPUT": str(target)})
+        # GVHMR resolves model/checkpoint paths such as
+        # ``inputs/checkpoints/vitpose/...`` relative to its repository root.
+        # Keep artifacts in the pipeline workspace while running the external
+        # process from the registered GVHMR checkout.
+        result = run_external(stage="gvhmr", workspace=target, command=command or default, timeout_seconds=self.timeout_seconds, cwd=Path(check.path or "."), env={"GVHMR_INPUT": str(source), "GVHMR_OUTPUT": str(target)})
         candidates = [target / "hmr4d_results.pt", *sorted(target.rglob("hmr4d_results.pt"))]
         output = next((path for path in candidates if path.is_file()), None)
         if output is None:

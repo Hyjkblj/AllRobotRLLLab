@@ -128,7 +128,7 @@ def command_from_env(name: str, *, default: Sequence[str] | None = None) -> tupl
     return tuple(str(item) for item in default) if default else None
 
 
-def run_external(*, stage: str, workspace: Path, command: Sequence[str], timeout_seconds: float = 3600, env: dict[str, str] | None = None) -> ExternalRunResult:
+def run_external(*, stage: str, workspace: Path, command: Sequence[str], timeout_seconds: float = 3600, env: dict[str, str] | None = None, cwd: Path | None = None) -> ExternalRunResult:
     normalized = tuple(str(item) for item in command)
     if not normalized or any(not item for item in normalized):
         raise RunnerError("RUNTIME_COMMAND_INVALID", f"{stage} command must be a non-empty argument list")
@@ -145,7 +145,7 @@ def run_external(*, stage: str, workspace: Path, command: Sequence[str], timeout
         creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
         process = subprocess.Popen(
             normalized,
-            cwd=workspace,
+            cwd=Path(cwd or workspace).resolve(),
             env={**os.environ, **(env or {}), "PLATFORM_STAGE": stage},
             shell=False,
             stdout=subprocess.PIPE,

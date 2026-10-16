@@ -62,12 +62,13 @@ def test_gmr_runner_normalizes_fixture_output(tmp_path: Path, monkeypatch) -> No
     source = tmp_path / "input.pt"
     source.write_bytes(b"fixture")
     script = tmp_path / "emit.py"
-    script.write_text("import os,pickle,numpy as np; n=15; pickle.dump({'dof_pos':np.zeros((n,29)),'root_pos':np.zeros((n,3)),'root_rot':np.tile([0,0,0,1],(n,1)),'fps':30},open(os.environ['GMR_OUTPUT'],'wb'))", encoding="utf-8")
+    script.write_text("import os,pickle,numpy as np; n=15; open(os.environ['GMR_OUTPUT']+'.cwd','w').write(os.getcwd()); pickle.dump({'dof_pos':np.zeros((n,29)),'root_pos':np.zeros((n,3)),'root_rot':np.tile([0,0,0,1],(n,1)),'fps':30},open(os.environ['GMR_OUTPUT'],'wb'))", encoding="utf-8")
     monkeypatch.setenv("GMR_COMMAND", f'"{sys.executable}" "{script}"')
     # The command override is intentionally independent of the upstream path.
     output, _ = GmrRunner(registry=registry, workspace=tmp_path / "work").run(source_path=source, output_dir=tmp_path / "work" / "run")
     assert output.is_file()
     assert (tmp_path / "work" / "run" / "retarget_motion.npz").is_file()
+    assert (tmp_path / "work" / "run" / "retarget_motion.pkl.cwd").read_text(encoding="utf-8") == str(runtime)
 
 
 def test_mujoco_compiler_explicitly_reports_missing_model(tmp_path: Path) -> None:
