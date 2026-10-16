@@ -150,6 +150,10 @@ def register_p3_tasks(celery_app, executor: P3TaskExecutor) -> None:
     def motion_process(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
         return executor.execute({**payload, "operation": "motion_process"})
 
+    @celery_app.task(name="allrobotrl.motion.process_gpu")
+    def motion_process_gpu(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
+        return executor.execute({**payload, "operation": "motion_process"})
+
     @celery_app.task(name="allrobotrl.motion.gvhmr")
     def motion_gvhmr(payload: dict[str, Any], idempotency_key: str | None = None) -> dict[str, Any]:
         return executor.execute({**payload, "operation": "motion_gvhmr"})

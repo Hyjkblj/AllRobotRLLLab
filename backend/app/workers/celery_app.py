@@ -38,6 +38,9 @@ def create_celery_app():
         result_expires=86400,
         task_routes={
             "allrobotrl.motion.process": {"queue": "motion-cpu"},
+            "allrobotrl.motion.process_gpu": {"queue": "motion-gpu"},
+            "allrobotrl.motion.gvhmr": {"queue": "motion-gpu"},
+            "allrobotrl.motion.gmr": {"queue": "motion-gpu"},
             "allrobotrl.assets.uploading": {"queue": "asset-io"},
             "allrobotrl.assets.validate": {"queue": "asset-io"},
             "allrobotrl.runs.created": {"queue": "motion-cpu"},

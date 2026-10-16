@@ -4,6 +4,10 @@ from backend.app.infrastructure.queue import TaskEnvelope
 from backend.app.workers import local_worker
 
 
+def test_local_worker_maps_video_full_motion_task_to_motion_process():
+    assert local_worker._operation_for_task("allrobotrl.motion.process_gpu") == "motion_process"
+
+
 def test_local_worker_executes_asset_validation_without_run_id(tmp_path, monkeypatch):
     envelope = TaskEnvelope(
         task_id="task-1",

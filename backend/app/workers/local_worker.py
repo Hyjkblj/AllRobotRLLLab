@@ -85,6 +85,7 @@ def run(*, worker_id: str = "local-worker", poll_interval: float = 1.0, once: bo
         "allrobotrl.motion.gvhmr",
         "allrobotrl.motion.gmr",
         "allrobotrl.motion.process",
+        "allrobotrl.motion.process_gpu",
     ))
     LocalRunRecovery(settings.runtime_root).reconcile(executor.training_service.run_service.uow)
     while True:
@@ -119,7 +120,7 @@ def run(*, worker_id: str = "local-worker", poll_interval: float = 1.0, once: bo
                         )
                 except Exception:
                     traceback.print_exc()
-            if envelope.task in {"allrobotrl.motion.gvhmr", "allrobotrl.motion.gmr", "allrobotrl.motion.process"}:
+            if envelope.task in {"allrobotrl.motion.gvhmr", "allrobotrl.motion.gmr", "allrobotrl.motion.process", "allrobotrl.motion.process_gpu"}:
                 try:
                     pipeline_id = str(envelope.payload["pipeline_id"])
                     pipeline = executor.motion_pipeline_service.store.get(pipeline_id)
@@ -142,7 +143,7 @@ def _operation_for_task(task: str) -> str:
         return "asset_validate"
     if task in {"assets.uploading", "allrobotrl.assets.uploading"}:
         return "asset_uploading"
-    if task == "allrobotrl.motion.process" or value == "process":
+    if task in {"allrobotrl.motion.process", "allrobotrl.motion.process_gpu"} or value == "process":
         return "motion_process"
     if task == "allrobotrl.motion.gvhmr" or value == "gvhmr":
         return "motion_gvhmr"

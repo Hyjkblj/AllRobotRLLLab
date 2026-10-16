@@ -200,7 +200,13 @@ class MotionPipelineService:
         queue = "motion-gpu" if asset.kind == AssetKind.VIDEO else "motion-cpu"
         key = hashlib.sha256(json.dumps(payload | {"edit_config": config.model_dump(mode="json")}, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         try:
-            task_name = "allrobotrl.motion.process" if phase in {"full", "compile"} else f"allrobotrl.motion.{phase}"
+            # A video full run executes GVHMR and GMR in the same process
+            # boundary. Keep it on the GPU queue even though compilation-only
+            # runs use the CPU motion worker.
+            if phase == "full" and asset.kind == AssetKind.VIDEO:
+                task_name = "allrobotrl.motion.process_gpu"
+            else:
+                task_name = "allrobotrl.motion.process" if phase in {"full", "compile"} else f"allrobotrl.motion.{phase}"
             task_id = self.task_dispatcher.enqueue(queue=queue, task=task_name, payload=payload, idempotency_key=key)
         except Exception as exc:
             self._fail(record, "TASK_QUEUE_UNAVAILABLE", str(exc))
