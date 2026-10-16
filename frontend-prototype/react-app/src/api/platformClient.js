@@ -1,4 +1,7 @@
 const PLATFORM_API = import.meta.env.VITE_PLATFORM_API_BASE || "/api/v1";
+const apiOrigin = PLATFORM_API.startsWith("http") ? new URL(PLATFORM_API).origin : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
+const apiPath = PLATFORM_API.startsWith("http") ? new URL(PLATFORM_API).pathname : PLATFORM_API;
+export const PLATFORM_WS = (import.meta.env.VITE_PLATFORM_WS_BASE || `${apiOrigin}${apiPath}`).replace(/\/$/, "");
 
 export class PlatformApiError extends Error {
   constructor(message, { status = 0, code = "API_ERROR", requestId = "", details = {} } = {}) {
@@ -102,6 +105,8 @@ export const platformApi = {
   getMotionPipeline: (assetVersionId) => request(`/motions/${encodeURIComponent(assetVersionId)}/pipeline`),
   getMotionPipelineById: (pipelineId) => request(`/motion-pipelines/${encodeURIComponent(pipelineId)}`),
   getMotionVisualizationUrl: (pipelineId, stage, artifactPath) => `${PLATFORM_API}/motion-pipelines/${encodeURIComponent(pipelineId)}/visualizations/${encodeURIComponent(stage)}/${artifactPath.split("/").map(encodeURIComponent).join("/")}`,
+  watchProjectAssetsUrl: (projectId) => `${PLATFORM_WS}/ws/projects/${encodeURIComponent(projectId)}/assets`,
+  watchMotionPipelineUrl: (pipelineId) => `${PLATFORM_WS}/ws/motion-pipelines/${encodeURIComponent(pipelineId)}`,
   validateMotionEdit: (config) => request("/motion-edits", { method: "POST", body: JSON.stringify(config) }),
   compileMotionEdit: (versionId, arrays) => request(`/motion-edits/${encodeURIComponent(versionId)}/compile`, { method: "POST", body: JSON.stringify(arrays) }),
   validateReward: (config, robotId, taskId) => {

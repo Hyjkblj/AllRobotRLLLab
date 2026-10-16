@@ -351,14 +351,18 @@ function MotionPipeline({ assets, robots, selectedRobotId, onRobotSelect, onDete
     // while preserving polling for queued/running work.
     if (!pipeline?.pipeline_id || ["GVHMR_READY", "GMR_READY", "READY", "FAILED"].includes(pipeline.status)) return undefined;
     let cancelled = false;
-    const timer = window.setInterval(() => {
-      platformApi.getMotionPipelineById(pipeline.pipeline_id).then((result) => {
-        if (cancelled) return;
-        setPipeline(result.item);
-        if (["READY", "FAILED"].includes(result.item?.status)) onRefresh?.();
-      }).catch((error) => { if (!cancelled) setLocalError(error); });
-    }, 1500);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    let socket;
+    let fallback;
+    const apply = (item) => { if (!cancelled && item) { setPipeline(item); if (["READY", "FAILED"].includes(item.status)) onRefresh?.(); } };
+    const poll = () => platformApi.getMotionPipelineById(pipeline.pipeline_id).then((result) => apply(result.item)).catch((error) => { if (!cancelled) setLocalError(error); });
+    const startFallback = () => { if (!fallback && !cancelled) fallback = window.setInterval(poll, 1500); };
+    try {
+      socket = new WebSocket(platformApi.watchMotionPipelineUrl(pipeline.pipeline_id));
+      socket.onmessage = (event) => { try { const message = JSON.parse(event.data); if (message.type === "motion_pipeline.snapshot") apply(message.item); } catch { /* ignore malformed events */ } };
+      socket.onerror = startFallback;
+      socket.onclose = startFallback;
+    } catch { startFallback(); }
+    return () => { cancelled = true; socket?.close(); if (fallback) window.clearInterval(fallback); };
   }, [onRefresh, pipeline?.pipeline_id, pipeline?.status]);
 
   const detect = async (event) => {
@@ -696,6 +700,33 @@ export default function PlatformWorkbench({ onOpenEditor }) {
     return () => { cancelled = true; };
   }, [selectedProjectId]);
 
+  useEffect(() => {
+    if (!selectedProjectId) return undefined;
+    let cancelled = false;
+    let socket;
+    let fallback;
+    const applySnapshot = (items) => {
+      const flattened = (items || []).map(({ asset, versions }) => ({ ...asset, version: versions?.[versions.length - 1] || null }));
+      setAssets(flattened);
+    };
+    try {
+      socket = new WebSocket(platformApi.watchProjectAssetsUrl(selectedProjectId));
+      socket.onmessage = (event) => {
+        if (cancelled) return;
+        try { const message = JSON.parse(event.data); if (message.type === "assets.snapshot") applySnapshot(message.items); } catch { /* ignore malformed events */ }
+      };
+      socket.onerror = () => {
+        if (!fallback && !cancelled) fallback = window.setInterval(refreshProject, 2000);
+      };
+      socket.onclose = () => {
+        if (!fallback && !cancelled) fallback = window.setInterval(refreshProject, 2000);
+      };
+    } catch {
+      fallback = window.setInterval(refreshProject, 2000);
+    }
+    return () => { cancelled = true; socket?.close(); if (fallback) window.clearInterval(fallback); };
+  }, [selectedProjectId]);
+
   const refreshProject = async () => {
     if (!selectedProjectId) return;
     try {
@@ -705,12 +736,6 @@ export default function PlatformWorkbench({ onOpenEditor }) {
       setRuns(runResult.items || []);
     } catch (loadError) { setError(loadError); }
   };
-
-  useEffect(() => {
-    if (!selectedProjectId || !assets.some((asset) => ["UPLOADING", "VALIDATING"].includes(asset.version?.status))) return undefined;
-    const timer = window.setInterval(refreshProject, 2000);
-    return () => window.clearInterval(timer);
-  }, [selectedProjectId, assets]);
 
   const createProject = (project) => { setProjects((current) => [project, ...current.filter((item) => item.project_id !== project.project_id)]); setSelectedProjectId(project.project_id); };
   const addAsset = (asset) => {
