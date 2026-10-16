@@ -714,7 +714,10 @@ export default function PlatformWorkbench({ onOpenEditor }) {
 
   const createProject = (project) => { setProjects((current) => [project, ...current.filter((item) => item.project_id !== project.project_id)]); setSelectedProjectId(project.project_id); };
   const addAsset = (asset) => {
-    const normalized = asset.item ? { ...asset.item, version: asset.version, completed: asset.completed, sha256: asset.sha256 } : asset;
+    // upload-complete returns the authoritative server version (normally
+    // VALIDATING). Prefer it over the creation response's stale UPLOADING
+    // version so the polling effect can advance the row to READY/REJECTED.
+    const normalized = asset.item ? { ...asset.item, version: asset.completed?.item || asset.version, completed: asset.completed, sha256: asset.sha256 } : asset;
     setAssets((current) => [normalized, ...current.filter((item) => item.asset_id !== normalized.asset_id)]);
   };
   const deleteAsset = (assetVersionId) => {
